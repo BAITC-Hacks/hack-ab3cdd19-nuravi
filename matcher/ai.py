@@ -77,6 +77,8 @@ def _post(base, path, key, body, timeout=6):
 def _json_content(response):
     try:
         content = response["choices"][0]["message"]["content"]
+        if not isinstance(content, str):
+            raise TypeError("missing text")
         if content.startswith("```"):
             content = content.split("\n", 1)[1].rsplit("```", 1)[0]
         return json.loads(content)
@@ -149,14 +151,19 @@ class AIService:
 
     def _chat(self, provider, system, payload, schema=None):
         if provider == "OpenAI":
-            body = {"model": self.config.get("OPENAI_CHAT_MODEL", "gpt-4o-mini"),
-                    "temperature": 0, "max_tokens": 800,
+            model = self.config.get("OPENAI_CHAT_MODEL", "gpt-4o-mini")
+            body = {"model": model,
                     "messages": [{"role": "system", "content": system},
                                  {"role": "user", "content": json.dumps(payload, ensure_ascii=False)}]}
+            if model.startswith(("gpt-5", "gpt-6")):
+                body.update({"reasoning_effort": "low", "max_completion_tokens": 2000})
+            else:
+                body.update({"temperature": 0, "max_tokens": 800})
             if schema is not None:
                 body["response_format"] = {"type": "json_schema", "json_schema": {
                     "name": "contractor_evidence", "strict": True, "schema": schema}}
-            response = _post(OPENAI_BASE, "/chat/completions", self.config.get("OPENAI_API_KEY"), body)
+            response = _post(OPENAI_BASE, "/chat/completions", self.config.get("OPENAI_API_KEY"), body,
+                             timeout=15 if model.startswith(("gpt-5", "gpt-6")) else 6)
         else:
             body = {"model": self.config.get("NVIDIA_CHAT_MODEL", "nvidia/nemotron-3.5-lightning-30b-a3b"),
                     "temperature": 0, "max_tokens": 800,
@@ -173,7 +180,7 @@ class AIService:
             return {}, "Нет описаний для AI-проверки"
         context = {"category": request.category, "format": request.event_format,
                    "preference": request.preference, "profiles": records}
-        fingerprint = hashlib.sha256(json.dumps({"context": context,
+        fingerprint = hashlib.sha256(json.dumps({"context": context, "audit_version": 2,
             "openai_model": self.config.get("OPENAI_CHAT_MODEL", "gpt-4o-mini"),
             "nvidia_model": self.config.get("NVIDIA_CHAT_MODEL", "nvidia/nemotron-3.5-lightning-30b-a3b")},
             ensure_ascii=False, sort_keys=True).encode()).hexdigest()
@@ -209,29 +216,26 @@ class AIService:
                 quotes[pid] = quote
         if not quotes:
             return {}, "AI не нашёл дословного подтверждения; показаны локальные объяснения"
-        if writer_name == "NVIDIA":
-            status = "NVIDIA: дословные фразы сверены с профилями"
-            self._save_evidence(fingerprint, quotes, status)
-            return quotes, status
         auditor = "Проверь, действительно ли каждая quote относится к preference, а если preference пустое — к category или format. " \
                   "Верни только JSON с полем approved_ids: список id подходящих цитат. При сомнении отклони."
         audit_payload = {"category": request.category, "format": request.event_format, "preference": request.preference,
                          "quotes": quotes}
-        try:
-            verdict = self._chat("NVIDIA", auditor, audit_payload)
-            auditor_name = "NVIDIA"
-        except AIUnavailable:
+        auditor_order = ("NVIDIA", "OpenAI") if writer_name == "OpenAI" else ("OpenAI", "NVIDIA")
+        for auditor_name in auditor_order:
             try:
-                verdict = self._chat("OpenAI", auditor, audit_payload, AUDIT_SCHEMA)
-                auditor_name = "OpenAI"
+                verdict = self._chat(auditor_name, auditor, audit_payload,
+                                     AUDIT_SCHEMA if auditor_name == "OpenAI" else None)
+                break
             except AIUnavailable:
-                return {}, "AI-аудитор недоступен; показаны локальные объяснения"
+                continue
+        else:
+            return {}, "AI-аудитор недоступен; показаны локальные объяснения"
         try:
             approved = verdict.get("approved_ids", []) if isinstance(verdict, dict) else []
             if not isinstance(approved, list):
                 raise AIUnavailable("неверный ответ аудитора")
             accepted = {pid: quote for pid, quote in quotes.items() if pid in approved}
-            status = f"OpenAI предложил фразы; {auditor_name} проверил смысл; текст сверен с профилями"
+            status = f"{writer_name} предложил фразы; {auditor_name} проверил смысл; текст сверен с профилями"
             self._save_evidence(fingerprint, accepted, status)
             return accepted, status
         except AIUnavailable:

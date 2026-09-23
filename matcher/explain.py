@@ -86,7 +86,10 @@ def recommendation_facts(candidate, q):
 def explain(candidate, q):
     p = candidate["profile"]
     hit = candidate["evidence"]
-    if hit and hit[0].get("field") == "languages":
+    ai_quote = candidate.get("ai_quote")
+    if ai_quote:
+        excerpt = ai_quote
+    elif hit and hit[0].get("field") == "languages":
         excerpt = ""
         reason = f"Пожелание подтверждено данными профиля: {hit[0]['match']}"
     elif hit:
@@ -106,9 +109,9 @@ def explain(candidate, q):
         shortened = excerpt[start:start + 210].rsplit(" ", 1)[0]
         excerpt = ("…" if start else "") + shortened + ("…" if start + 210 < len(excerpt) else "")
     excerpt = excerpt.rstrip(" .!?")
-    if not (hit and hit[0].get("field") == "languages"):
+    if ai_quote or not (hit and hit[0].get("field") == "languages"):
         reason = f"В описании {p.id}: «{excerpt}»" if excerpt else "Описание профиля отсутствует"
-    if q.preference and not hit:
+    if q.preference and not hit and not ai_quote:
         reason += "; подтверждения пожеланию не найдено"
     return (f"На {q.date:%d.%m.%Y} доступен по календарю; формат «{q.event_format}» подходит, цена от {money(p.price)} укладывается в бюджет. "
             f"{reason}.")

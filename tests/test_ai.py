@@ -7,7 +7,7 @@ from matcher.ai import AIService, AIUnavailable
 from matcher.data import load_catalog
 from matcher.demo import demo_request
 from matcher.engine import failures, select
-from matcher.explain import comparison_summary
+from matcher.explain import comparison_summary, explain
 
 
 def test_ai_score_changes_only_semantics_after_hard_filters():
@@ -70,6 +70,51 @@ def test_quote_requires_exact_source_and_auditor(tmp_path, monkeypatch):
                         {"items": [{"id": "A", "quote": "Выдающийся опыт в любой отрасли."}]})
     quotes, _ = service.evidence([candidate], q)
     assert quotes == {}
+
+
+def test_nvidia_quote_is_hidden_when_auditor_rejects_it(tmp_path, monkeypatch):
+    q = replace(demo_request("Пожелание · деловой форум"), preference="спокойный стиль")
+    candidate = {"profile": SimpleNamespace(id="A", description="Веду спокойно и без спешки.")}
+    service = AIService({"NVIDIA_API_KEY": "test"}, tmp_path / "cache.json",
+                        tmp_path / "evidence.json")
+
+    def fake_chat(provider, system, payload, schema=None):
+        if provider == "OpenAI":
+            raise AIUnavailable("API-ключ не задан")
+        if "Выбери" in system:
+            return {"items": [{"id": "A", "quote": "Веду спокойно и без спешки."}]}
+        return {"approved_ids": []}
+
+    monkeypatch.setattr(service, "_chat", fake_chat)
+    quotes, status = service.evidence([candidate], q)
+    assert quotes == {}
+    assert "NVIDIA проверил смысл" in status
+
+
+def test_ai_quote_is_used_in_card_explanation():
+    catalog = load_catalog()
+    q = replace(demo_request("Пожелание · деловой форум"), preference="спокойный стиль")
+    candidate = select(catalog, q)["candidates"][0].copy()
+    quote = candidate["profile"].description.split(".", 1)[0]
+    candidate["ai_quote"] = quote
+    text = explain(candidate, q)
+    assert f"«{quote}" in text
+    assert "подтверждения пожеланию не найдено" not in text
+
+
+def test_reasoning_model_override_uses_supported_request_parameters(monkeypatch):
+    sent = {}
+
+    def fake_post(base, path, key, body, timeout=6):
+        sent.update(body)
+        return {"choices": [{"message": {"content": '{"approved_ids": []}'}}]}
+
+    monkeypatch.setattr("matcher.ai._post", fake_post)
+    service = AIService({"OPENAI_API_KEY": "test", "OPENAI_CHAT_MODEL": "gpt-5.6-sol"})
+    assert service._chat("OpenAI", "Return JSON", {}, {"type": "object"}) == {"approved_ids": []}
+    assert sent["model"] == "gpt-5.6-sol"
+    assert sent["reasoning_effort"] == "low"
+    assert "temperature" not in sent and "max_tokens" not in sent
 
 
 def test_unknown_ai_score_rejected():

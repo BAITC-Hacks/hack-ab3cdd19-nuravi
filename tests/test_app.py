@@ -12,8 +12,7 @@ APP = str(Path(__file__).resolve().parents[1] / "app.py")
 @pytest.mark.parametrize("name", list(DEMOS))
 def test_demo_ui(name):
     at = AppTest.from_file(APP, default_timeout=20).run()
-    at.button_group(key="demo").set_value(name)
-    at.run()
+    at.button(key=f"demo_{list(DEMOS).index(name)}").click().run()
     assert not at.exception
     assert not at.error
     assert any("Почему другие" in s.value for s in at.subheader)
@@ -31,12 +30,12 @@ def test_demo_ui(name):
 def test_invalid_budget_and_recovery():
     at = AppTest.from_file(APP, default_timeout=20).run()
     at.number_input(key="budget").set_value(0)
-    at.button[0].click().run()
+    at.button(key="submit_query").click().run()
     assert not at.exception
     assert "Бюджет" in at.error[0].value
     assert not at.success
     at.number_input(key="budget").set_value(1500000)
-    at.button[0].click().run()
+    at.button(key="submit_query").click().run()
     assert not at.exception and not at.error and at.success
 
 
@@ -44,7 +43,7 @@ def test_submit_custom_query_without_optional_fields():
     at = AppTest.from_file(APP, default_timeout=20).run()
     at.multiselect(key="languages").set_value([])
     at.number_input(key="hours").set_value(0.0)
-    at.button[0].click().run()
+    at.button(key="submit_query").click().run()
     assert not at.exception
     assert at.session_state.request.hours is None
     assert at.session_state.request.languages == ()
@@ -82,7 +81,7 @@ def test_only_local_profile_does_not_claim_other_profiles_failed():
     at.number_input(key="budget").set_value(3000000)
     at.multiselect(key="languages").set_value([])
     at.number_input(key="hours").set_value(0.0)
-    at.button[0].click().run()
+    at.button(key="submit_query").click().run()
     assert not at.exception
     assert "Профилей этой категории в городе: 1" in at.info[0].value
     assert "Остальные профили не прошли" not in at.info[0].value
@@ -90,8 +89,7 @@ def test_only_local_profile_does_not_claim_other_profiles_failed():
 
 def test_preference_is_applied_to_cards():
     at = AppTest.from_file(APP, default_timeout=20).run()
-    at.button_group(key="demo").set_value("Пожелание · деловой форум")
-    at.run()
+    at.button(key="demo_2").click().run()
     assert not at.exception
     assert at.session_state.request.preference == "деловой форум"
     assert any("бизнес форумы" in item.value for item in at.markdown)
