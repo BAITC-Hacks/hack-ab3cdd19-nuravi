@@ -61,11 +61,46 @@ def test_incomplete_prompt_asks_only_missing_fields_and_accepts_followup(monkeyp
     at = submit_prompt(app(), "Ищу ведущего")
     assert not at.exception and not at.success
     assert at.session_state.request is None
-    assert "город" in at.info[0].value and "бюджет" in at.info[0].value
+    assert "городе" in at.info[0].value and "дату" in at.info[0].value
     assert "кого ищете" not in at.info[0].value
+    assert any("Предварительно" in item.value for item in at.caption)
+    assert sum("Дата не указана — доступность не проверена" in item.value
+               for item in at.markdown) == 3
     at = submit_prompt(at, "Алматы, 14 ноября, корпоратив, до 1,5 млн ₸")
     assert not at.exception and at.success
     assert calls[1][1]["category"] == "Ведущий"
+
+
+def test_partial_request_does_not_show_a_score_or_false_availability(monkeypatch):
+    first = {"city": None, "category": "Ведущий", "date": None,
+             "event_format": None, "budget": None, "hours": None,
+             "languages": (), "preference": ""}
+    monkeypatch.setattr(AIService, "interpret", lambda self, *args: first)
+    at = submit_prompt(app(), "Мне нужен ведущий")
+    assert not at.exception and not at.error
+    assert at.session_state.request is None
+    assert sum("Ведущий» есть в профиле" in item.value for item in at.markdown) == 3
+    assert not any("Доступен" in item.value or "Совпадение с запросом" in item.value
+                   for item in at.markdown)
+
+
+def test_three_turn_dialogue_updates_previews_before_final_matching(monkeypatch):
+    full = asdict(demo_request("Плотная категория · 14 ноября"))
+    first = dict(full, city=None, date=None, event_format=None, budget=None)
+    second = dict(full, event_format=None, budget=None)
+    replies = iter((first, second, full))
+    monkeypatch.setattr(AIService, "interpret", lambda self, *args: next(replies))
+    at = submit_prompt(app(), "Мне нужен ведущий")
+    assert at.session_state.request is None
+    assert any("Предварительно" in item.value for item in at.caption)
+    at = submit_prompt(at, "Алматы, 14 ноября")
+    assert at.session_state.request is None
+    assert "формат" in at.info[0].value and "бюджет" in at.info[0].value
+    assert any("Дата отсутствует в списке занятых дат" in item.value
+               for item in at.markdown)
+    at = submit_prompt(at, "Корпоратив, до 1,5 млн тенге")
+    assert not at.exception and at.session_state.request is not None
+    assert "Подобраны 3" in at.success[0].value
 
 
 def test_ai_outage_keeps_text_and_manual_path(monkeypatch):

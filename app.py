@@ -11,7 +11,7 @@ from matcher.engine import (Request, select, failures, language_preference,
                             REASONS, WEIGHTS)
 from matcher.explain import (comparison_rows, comparison_summary, explain,
                              limitations, money, recommendation_facts)
-from matcher.intake import choices, missing, question, to_request
+from matcher.intake import choices, missing, preliminary, question, to_request
 
 st.set_page_config(page_title="Подбор · HackAlem", page_icon="◈", layout="wide")
 st.html("<style>" + Path(__file__).with_name("ui.css").read_text(encoding="utf-8") + "</style>")
@@ -83,22 +83,68 @@ def understood(values):
     return " · ".join(shown)
 
 
+def show_preliminary(values):
+    preview = preliminary(catalog, values)
+    st.subheader("Первые варианты")
+    if not values.get("category"):
+        st.caption("Назовите тип подрядчика — покажем профили сразу, не дожидаясь остальных деталей.")
+    elif preview["category_count"] == 0:
+        st.warning(f"В каталоге пока нет категории «{values['category']}». Уточните, кого ищете.")
+    elif values.get("city") and preview["city_count"] == 0:
+        st.warning(f"В городе «{values['city']}» нет категории «{values['category']}». Попробуйте другой город.")
+    elif not preview["candidates"]:
+        st.warning("По уже указанным условиям профилей нет. Измените дату, бюджет или другие условия.")
+    else:
+        st.caption(f"Предварительно {preview['total']} профилей по указанным условиям; показаны "
+                   f"{len(preview['candidates'])} по городу и стартовой цене. Это ещё не итоговый рейтинг.")
+        if values.get("date") is None:
+            st.caption("Дата не указана — занятость не проверена. После уточнения даты выдача обновится.")
+        cards = st.columns(len(preview["candidates"]), gap="medium")
+        for i, (column, profile) in enumerate(zip(cards, preview["candidates"]), 1):
+            with column.container(border=True, key=f"preview_card_{i}"):
+                st.markdown(f"### {profile.name}")
+                st.caption(f"{profile.id} · {' / '.join(profile.categories)} · {profile.city}")
+                st.markdown(f"**от {money(profile.price)}**")
+                facts = [f"Категория «{values['category']}» есть в профиле."]
+                if values.get("city"):
+                    facts.append(f"Город профиля — {profile.city}.")
+                if values.get("date") is None:
+                    if profile.busy_dates is None:
+                        facts.append("В профиле нет данных о занятых датах — доступность требует подтверждения.")
+                    else:
+                        facts.append("Дата не указана — доступность не проверена.")
+                else:
+                    facts.append("Дата отсутствует в списке занятых дат — подрядчик считается доступным.")
+                if values.get("event_format"):
+                    facts.append(f"Формат «{values['event_format']}» указан в профиле.")
+                if values.get("budget") is not None:
+                    facts.append(f"Цена от {money(profile.price)} не превышает бюджет {money(values['budget'])}.")
+                if values.get("languages"):
+                    facts.append("Поддерживаются запрошенные языки: " + ", ".join(values["languages"]) + ".")
+                if values.get("hours") is not None:
+                    facts.append(f"Запрошено {values['hours']:g} ч; максимум профиля — "
+                                 f"{f'{profile.max_hours:g} ч' if profile.max_hours is not None else 'не указан'}.")
+                st.write(" ".join(facts))
+                if profile.synthetic or profile.city_imputed or profile.price_imputed:
+                    st.caption("В профиле есть восстановленные или синтетические данные — уточните их перед заказом.")
+
+
 with st.container(key="hero"):
     st.markdown('<div class="hero-kicker"><span class="brand-mark" aria-hidden="true"></span>NURAVI AI</div>',
                 unsafe_allow_html=True)
     st.title("Кого вы ищете?")
-    st.write("Опишите событие своими словами. ИИ уточнит детали и предложит подходящих подрядчиков.")
+    st.write("Опишите запрос — покажем варианты и уточним детали.")
 
 with st.container(key="prompt_search"):
     with st.form("prompt_form", clear_on_submit=True):
         message = st.text_area("Ваш запрос" if not st.session_state.intake_values else "Уточните текущий запрос",
-                               key="prompt_message", height=138, max_chars=1000, label_visibility="collapsed",
+                               key="prompt_message", height=68, max_chars=1000, label_visibility="collapsed",
                                placeholder="Например, нужен ведущий для корпоратива в Алматы 14 ноября…")
         action_label = ("Ответить и продолжить" if st.session_state.intake_values and
                         missing(st.session_state.intake_values) else
                         "Уточнить подбор" if st.session_state.request else "Найти подрядчика")
         composer_footer = st.columns([2.6, 1], gap="small", vertical_alignment="center")
-        composer_footer[0].caption("Начните с идеи — детали можно уточнить позже")
+        composer_footer[0].caption("Можно начать с «Мне нужен ведущий»")
         with composer_footer[1]:
             prompt_submitted = st.form_submit_button(action_label, key="submit_prompt",
                                                      type="primary", use_container_width=True)
@@ -138,6 +184,12 @@ if st.session_state.intake_error or st.session_state.intake_values:
             st.markdown("**Я понял:** " + understood(st.session_state.intake_values))
             if missing(st.session_state.intake_values):
                 st.info(question(st.session_state.intake_values))
+                remaining = tuple(field for field in missing(st.session_state.intake_values)
+                                  if field not in {"city", "date"})
+                if {"city", "date"}.intersection(missing(st.session_state.intake_values)) and remaining:
+                    labels = {"event_format": "формат события", "budget": "бюджет",
+                              "category": "категория"}
+                    st.caption("Позже уточним: " + ", ".join(labels[field] for field in remaining) + ".")
             else:
                 st.caption("Параметры можно исправить в форме ниже. Подбор уже выполнен.")
             if st.button("Начать новый запрос", key="new_query"):
@@ -150,6 +202,9 @@ if st.session_state.intake_error or st.session_state.intake_values:
                                      "hours": 0.0, "preference": ""}.items():
                     st.session_state[field] = value
                 st.rerun()
+
+if st.session_state.request is None and st.session_state.intake_values and not st.session_state.intake_error:
+    show_preliminary(st.session_state.intake_values)
 
 with st.container(key="manual_access"):
     manual_form = st.expander("Изменить параметры или заполнить вручную",

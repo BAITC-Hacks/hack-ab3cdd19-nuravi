@@ -6,7 +6,7 @@ import pytest
 from matcher.ai import AIService, AIUnavailable, INTAKE_SCHEMA
 from matcher.data import load_catalog
 from matcher.engine import select
-from matcher.intake import missing, normalize, question, to_request
+from matcher.intake import missing, normalize, preliminary, question, to_request
 
 
 FULL = {"city": "Алматы", "date": "2026-11-14", "event_format": "корпоратив",
@@ -32,7 +32,8 @@ def test_missing_and_invalid_required_fields_trigger_one_clarification():
     values = normalize(dict(FULL, city=None, date="2027-01-01", budget=0), catalog)
     assert missing(values) == ("city", "date", "budget")
     text = question(values)
-    assert "город" in text and "дату" in text and "бюджет" in text
+    assert "городе" in text and "дату" in text
+    assert "бюджет" not in text  # Ask for the next two facts, not the whole form.
     assert "категорию" not in text
     with pytest.raises(ValueError):
         to_request(values)
@@ -43,6 +44,40 @@ def test_unknown_city_is_an_honest_empty_result():
     values = normalize(dict(FULL, city="Шымкент"), catalog)
     assert to_request(values).city == "Шымкент"
     assert select(catalog, to_request(values))["status"] == "no_category"
+
+
+def test_category_alone_yields_three_unranked_previews_without_claiming_availability():
+    catalog = load_catalog()
+    values = normalize(dict(FULL, city=None, date=None, event_format=None,
+                            budget=None, hours=None, languages=[], preference=None), catalog)
+    result = preliminary(catalog, values)
+    assert result["total"] == 15
+    assert len(result["candidates"]) == 3
+    assert all("Ведущий" in p.categories for p in result["candidates"])
+    assert missing(values) == ("city", "date", "event_format", "budget")
+
+
+def test_previews_apply_only_known_constraints_and_change_on_date():
+    catalog = load_catalog()
+    values = normalize(dict(FULL, event_format=None, budget=None,
+                            hours=None, languages=[], preference=None), catalog)
+    result = preliminary(catalog, values)
+    assert all(p.city == "Алматы" for p in result["candidates"])
+    assert result["excluded"]["busy"] > 0
+    assert all(p.busy_dates is not None and values["date"] not in p.busy_dates
+               for p in result["candidates"])
+    another = preliminary(catalog, dict(values, date=date(2026, 11, 15)))
+    assert another["excluded"]["busy"] != result["excluded"]["busy"]
+
+
+def test_previews_do_not_ignore_city_or_budget():
+    catalog = load_catalog()
+    values = normalize(dict(FULL, city="Зарубежье", date=None, event_format=None,
+                            budget=None, hours=None, languages=[], preference=None), catalog)
+    result = preliminary(catalog, values)
+    assert result["category_count"] > 0 and result["city_count"] == 0
+    values = dict(values, city="Алматы", budget=Decimal(10000))
+    assert preliminary(catalog, values)["total"] == 0
 
 
 def test_ai_interpretation_is_cached_and_schema_checked(tmp_path, monkeypatch):

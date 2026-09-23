@@ -28,8 +28,8 @@ h1, h2, h3 {
 
 .st-key-hero {
   max-width: 860px;
-  margin: 0 auto 2.5rem;
-  padding: clamp(3.25rem, 8vh, 6.5rem) 0 0;
+  margin: 0 auto 1.25rem;
+  padding: clamp(1.8rem, 4vh, 3rem) 0 0;
   text-align: left;
 }
 
@@ -88,7 +88,7 @@ h1, h2, h3 {
   border: 1px solid #dde5e1;
   border-radius: 23px;
   box-shadow: 0 10px 36px rgba(27, 52, 45, .055), 0 2px 7px rgba(27, 52, 45, .025);
-  padding: 1.15rem 1.3rem .95rem;
+  padding: .75rem 1.1rem .65rem;
   transition: border-color .2s ease, box-shadow .2s ease, transform .2s ease;
 }
 
@@ -117,8 +117,8 @@ h1, h2, h3 {
 }
 
 .st-key-prompt_search textarea {
-  min-height: 132px;
-  padding: .35rem .15rem !important;
+  min-height: 66px;
+  padding: .2rem .15rem !important;
   border: 0 !important;
   background: transparent !important;
   box-shadow: none !important;
@@ -146,7 +146,7 @@ h1, h2, h3 {
 }
 
 .st-key-prompt_search [data-testid="stForm"] button {
-  min-height: 48px;
+  min-height: 40px;
   border: 1px solid #234b44 !important;
   border-radius: 12px !important;
   background: #234b44 !important;
@@ -177,7 +177,7 @@ h1, h2, h3 {
 }
 
 .st-key-search_feedback {
-  margin-top: 1.25rem;
+  margin-top: .8rem;
   color: var(--ink);
 }
 
@@ -195,8 +195,8 @@ h1, h2, h3 {
 }
 
 .st-key-manual_access {
-  margin-top: 1rem;
-  margin-bottom: 3.5rem;
+  margin-top: .6rem;
+  margin-bottom: 1.25rem;
 }
 
 .st-key-manual_access details,
@@ -246,6 +246,13 @@ h1, h2, h3 {
 .st-key-event_form [data-testid="stWidgetLabel"] p {
   font-weight: 650;
   color: var(--ink);
+}
+
+[class*="st-key-preview_card_"] {
+  background: #fff;
+  border: 1px solid var(--line) !important;
+  border-radius: 18px !important;
+  min-height: 220px;
 }
 
 .st-key-result_metrics [data-testid="stMetric"] {
@@ -319,11 +326,11 @@ h1, h2, h3 {
 
 @media (max-width: 740px) {
   .block-container { padding: 1rem .8rem 2.5rem; }
-  .st-key-hero { padding: 3.2rem .2rem 0; margin-bottom: 1.9rem; }
+  .st-key-hero { padding: 2rem .2rem 0; margin-bottom: 1.1rem; }
   .st-key-hero h1 { font-size: clamp(2.9rem, 11vw, 4.2rem); }
-  .st-key-prompt_search { padding: 1rem 1rem .75rem; border-radius: 19px; }
-  .st-key-prompt_search textarea { min-height: 118px; }
-  .st-key-manual_access { margin-bottom: 2.5rem; }
+  .st-key-prompt_search { padding: .7rem .8rem .55rem; border-radius: 19px; }
+  .st-key-prompt_search textarea { min-height: 66px; }
+  .st-key-manual_access { margin-bottom: 1.25rem; }
   [class*="st-key-result_card_"] { min-height: 0; }
 }
 
