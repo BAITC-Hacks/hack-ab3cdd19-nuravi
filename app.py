@@ -1,5 +1,5 @@
 from dataclasses import asdict, replace
-from datetime import timedelta
+from datetime import date, timedelta
 import json
 from pathlib import Path
 
@@ -7,11 +7,11 @@ import streamlit as st
 
 from matcher.data import DATA, START, END, key, load_catalog
 from matcher.ai import AIService, AIUnavailable
-from matcher.demo import DEMOS, demo_request
 from matcher.engine import (Request, select, failures, language_preference,
                             REASONS, WEIGHTS)
 from matcher.explain import (comparison_rows, comparison_summary, explain,
                              limitations, money, recommendation_facts)
+from matcher.intake import choices, missing, question, to_request
 
 st.set_page_config(page_title="Подбор · HackAlem", page_icon="◈", layout="wide")
 st.html("<style>" + Path(__file__).with_name("ui.css").read_text(encoding="utf-8") + "</style>")
@@ -34,103 +34,152 @@ if not catalog.profiles:
     st.stop()
 
 
-def fill_demo():
-    data = DEMOS[st.session_state.demo]
-    st.session_state.preference = ""
-    for k, v in data.items():
-        st.session_state[k] = list(v) if k == "languages" else float(v) if k == "hours" and v else v
-    st.session_state.hours = float(data["hours"] or 0)
-    st.session_state.request = demo_request(st.session_state.demo)
-    st.session_state.pop("validation_error", None)
+st.session_state.setdefault("request", None)
+st.session_state.setdefault("intake_values", {})
+st.session_state.setdefault("intake_error", "")
+st.session_state.setdefault("last_prompt", "")
+st.session_state.setdefault("ai_enabled", False)
+st.session_state.setdefault("city", "Алматы")
+st.session_state.setdefault("category", "Ведущий")
+st.session_state.setdefault("date", START)
+st.session_state.setdefault("event_format", "корпоратив")
+st.session_state.setdefault("budget", 0)
+st.session_state.setdefault("languages", [])
+st.session_state.setdefault("hours", 0.0)
+st.session_state.setdefault("preference", "")
 
 
-if "request" not in st.session_state:
-    st.session_state.demo = next(iter(DEMOS))
-    fill_demo()
-
-DEMO_CARDS = {
-    "Плотная категория · 14 ноября": ("01 / МНОГО ВАРИАНТОВ", "Корпоратив в Алматы", "Три рекомендации из плотной категории."),
-    "Та же заявка · 15 ноября": ("04 / ДРУГАЯ ДАТА", "Смена даты", "Посмотрите, кто вошёл в выдачу после смены дня."),
-    "Пожелание · деловой форум": ("05 / СМЫСЛ ЗАЯВКИ", "Деловой форум", "Проверьте совпадение пожелания с описанием."),
-    "Редкая категория · флорист": ("02 / РЕДКАЯ КАТЕГОРИЯ", "Флорист", "Один подходящий профиль без искусственного топ-3."),
-    "Никто не проходит · бюджет": ("03 / НЕТ СОВПАДЕНИЙ", "Строгий бюджет", "Честный пустой результат с причинами отказа."),
-    "Категории нет · зарубежье": ("06 / НЕТ КАТЕГОРИИ", "Другой город", "Отдельное объяснение отсутствующей категории."),
-}
-PRIMARY_DEMOS = ("Плотная категория · 14 ноября", "Редкая категория · флорист",
-                 "Никто не проходит · бюджет")
-SECONDARY_DEMOS = ("Та же заявка · 15 ноября", "Пожелание · деловой форум",
-                   "Категории нет · зарубежье")
+def sync_manual(values):
+    for field in ("city", "category", "date", "event_format", "budget", "languages", "hours", "preference"):
+        value = values.get(field)
+        if value is None:
+            continue
+        if field == "languages":
+            value = list(value)
+        elif field == "hours":
+            value = float(value)
+        elif field == "budget":
+            value = int(value)
+        st.session_state[field] = value
 
 
-def choose_demo(name):
-    st.session_state.demo = name
-    fill_demo()
-
-
-def show_demo_card(name, index):
-    eyebrow, title, description = DEMO_CARDS[name]
-    with st.container(border=True, key=f"demo_card_{index}"):
-        st.caption(eyebrow)
-        st.markdown(f"### {title}")
-        st.write(description)
-        selected = st.session_state.demo == name
-        st.button("Выбран" if selected else "Показать пример", key=f"demo_{index}",
-                  on_click=choose_demo, args=(name,), type="primary" if selected else "secondary",
-                  use_container_width=True)
+def understood(values):
+    labels = {"category": "Кого", "city": "Город", "date": "Дата", "event_format": "Формат",
+              "budget": "Бюджет", "languages": "Язык", "hours": "Длительность", "preference": "Пожелание"}
+    shown = []
+    for field in ("category", "city", "date", "event_format", "budget", "languages", "hours", "preference"):
+        value = values.get(field)
+        if value is None or value == "" or value == () or value == []:
+            continue
+        if field == "date":
+            value = f"{value:%d.%m.%Y}"
+        elif field == "budget":
+            value = money(value)
+        elif field == "languages":
+            value = ", ".join(value)
+        elif field == "hours":
+            value = f"{value:g} ч"
+        shown.append(f"**{labels[field]}:** {value}")
+    return " · ".join(shown)
 
 
 with st.container(key="hero"):
-    hero_text, hero_fact = st.columns([2.1, 1], vertical_alignment="center")
-    with hero_text:
-        st.markdown('<span class="hero-kicker">NURAVI / HACKALEM AI</span>', unsafe_allow_html=True)
-        st.title("Подрядчик для вашего события — за минуту")
-        st.write("Задайте условия. Сервис проверит занятость и бюджет, затем покажет до трёх вариантов с понятными причинами выбора.")
-    with hero_fact:
-        st.markdown('<div class="hero-note"><strong>До 3</strong><span>вариантов по данным каталога с объяснением для каждого</span></div>',
-                    unsafe_allow_html=True)
+    st.markdown('<span class="hero-kicker">NURAVI / HACKALEM AI</span>', unsafe_allow_html=True)
+    st.title("Кого вы ищете?")
+    st.write("Опишите событие своими словами. ИИ уточнит недостающее и подберёт до трёх подрядчиков.")
 
-st.subheader("Попробуйте готовый сценарий")
-st.caption("Выберите пример — форма и результат обновятся сразу.")
-demo_columns = st.columns(3, gap="medium")
-for index, name in enumerate(PRIMARY_DEMOS):
-    with demo_columns[index]:
-        show_demo_card(name, list(DEMOS).index(name))
-with st.expander("Ещё сценарии · дата, пожелание, город"):
-    extra_columns = st.columns(3, gap="medium")
-    for index, name in enumerate(SECONDARY_DEMOS):
-        with extra_columns[index]:
-            show_demo_card(name, list(DEMOS).index(name))
+with st.container(border=True, key="prompt_search"):
+    with st.form("prompt_form", clear_on_submit=True):
+        message = st.text_area("Ваш запрос" if not st.session_state.intake_values else "Уточните текущий запрос",
+                               key="prompt_message", height=105, max_chars=1000,
+                               placeholder="Например: нужен ведущий для корпоратива в Алматы 14 ноября, до 1,5 млн ₸, на русском, на 6 часов")
+        action_label = ("Ответить и продолжить" if st.session_state.intake_values and
+                        missing(st.session_state.intake_values) else
+                        "Уточнить подбор" if st.session_state.request else "Найти подрядчика")
+        prompt_submitted = st.form_submit_button(action_label, key="submit_prompt",
+                                                 type="primary", use_container_width=True)
+    if prompt_submitted:
+        if not message.strip():
+            st.warning("Опишите, кого ищете, или откройте ручной ввод ниже.")
+        else:
+            st.session_state.last_prompt = message.strip()
+            try:
+                with st.spinner("ИИ разбирает ваш запрос…"):
+                    values = AIService().interpret(message.strip(), st.session_state.intake_values,
+                                                    catalog, date.today())
+                st.session_state.intake_values = values
+                st.session_state.intake_error = ""
+                st.session_state.request = to_request(values) if not missing(values) else None
+                sync_manual(values)
+                st.session_state.pop("validation_error", None)
+            except AIUnavailable as exc:
+                st.session_state.request = None
+                reason = str(exc)
+                if reason not in {"Ключи ИИ не настроены", "нет соединения с AI-сервисом",
+                                  "проверьте API-ключи", "исчерпан лимит запросов AI",
+                                  "не удалось обработать запрос"}:
+                    reason = "не удалось обработать запрос"
+                st.session_state.intake_error = (f"ИИ сейчас недоступен: {reason}. "
+                                                 "Заполните параметры вручную — ваш текст сохранён ниже.")
+            except ValueError:
+                st.session_state.request = None
+                st.session_state.intake_error = ("ИИ не смог прочитать условия. "
+                                                 "Заполните параметры вручную — ваш текст сохранён ниже.")
+    if st.session_state.intake_error:
+        st.warning(st.session_state.intake_error)
+        st.caption(f"Ваш запрос: {st.session_state.last_prompt}")
+    elif st.session_state.intake_values:
+        st.markdown("**Я понял:** " + understood(st.session_state.intake_values))
+        if missing(st.session_state.intake_values):
+            st.info(question(st.session_state.intake_values))
+        else:
+            st.caption("Параметры можно исправить в форме ниже. Подбор уже выполнен.")
+        if st.button("Начать новый запрос", key="new_query"):
+            st.session_state.request = None
+            st.session_state.intake_values = {}
+            st.session_state.intake_error = ""
+            st.session_state.last_prompt = ""
+            for field, value in {"city": "Алматы", "category": "Ведущий", "date": START,
+                                 "event_format": "корпоратив", "budget": 0, "languages": [],
+                                 "hours": 0.0, "preference": ""}.items():
+                st.session_state[field] = value
+            st.rerun()
 
-with st.container(border=True, key="event_form"):
-    st.markdown("### Параметры события")
-    st.caption("Обязательные поля определяют, кто может попасть в рекомендации.")
-    row = st.columns([1, 1.2, 1])
-    row[0].selectbox("Город", sorted({p.city for p in catalog.profiles}), key="city")
-    row[1].selectbox("Категория", sorted({c for p in catalog.profiles for c in p.categories}), key="category")
-    row[2].date_input("Дата", min_value=START, max_value=END, format="DD.MM.YYYY", key="date",
-                      help="Подрядчики, занятые в выбранный день, исключаются из рекомендаций.")
-    row = st.columns([1, 1])
-    row[0].selectbox("Формат события", sorted({f for p in catalog.profiles for f in p.formats}), key="event_format")
-    row[1].number_input("Бюджет, ₸", min_value=0, step=50000, key="budget")
-    with st.expander("Уточнить подбор · язык, длительность и пожелание",
-                     expanded=bool(st.session_state.request.preference)):
+with st.expander("Изменить параметры или заполнить вручную", expanded=bool(st.session_state.intake_error)):
+    with st.container(border=True, key="event_form"):
+        st.caption("Обязательные поля: город, категория, дата, формат и бюджет.")
+        options = choices(catalog)
+        row = st.columns([1, 1.2, 1])
+        row[0].selectbox("Город", sorted(set(options["cities"]) | {st.session_state.city}), key="city")
+        row[1].selectbox("Категория", sorted(set(options["categories"]) | {st.session_state.category}), key="category")
+        row[2].date_input("Дата", min_value=START, max_value=END, format="DD.MM.YYYY", key="date",
+                          help="Подрядчики, занятые в выбранный день, исключаются из рекомендаций.")
+        row = st.columns([1, 1])
+        row[0].selectbox("Формат события", options["formats"], key="event_format")
+        row[1].number_input("Бюджет, ₸", min_value=0, step=50000, key="budget")
         optional = st.columns(2)
-        optional[0].multiselect("Языки", sorted({l for p in catalog.profiles for l in p.languages}), key="languages", help="Подрядчик должен поддерживать все выбранные языки.")
+        optional[0].multiselect("Языки · необязательно", sorted(set(options["languages"]) | set(st.session_state.languages)),
+                                key="languages", help="Подрядчик должен поддерживать все выбранные языки.")
         optional[1].number_input("Длительность, ч · 0 = не указана", min_value=0.0, step=0.5, key="hours")
         st.text_input("Что важно в подрядчике · необязательно", key="preference",
                       max_chars=240, placeholder="Например: спокойный стиль и опыт деловых мероприятий")
-    st.toggle("Уточнить рекомендации с ИИ", key="ai_enabled",
-              help="ИИ сравнивает описания с пожеланием. Условия события проверяются отдельно.")
-    submitted = st.button("Подобрать подрядчиков", key="submit_query", type="primary", use_container_width=True)
-    if submitted:
-        try:
-            st.session_state.request = Request(
-                **{k: st.session_state[k] for k in ("city", "date", "event_format", "category", "budget", "languages", "preference")},
-                hours=st.session_state.hours or None)
-            st.session_state.pop("validation_error", None)
-        except ValueError as exc:
-            st.session_state.validation_error = str(exc)
-    st.caption("Доступные даты: 23.09–31.12.2026. Язык, длительность и пожелание можно не указывать.")
+        st.toggle("Уточнить рекомендации с ИИ", key="ai_enabled",
+                  help="ИИ сравнивает описания с пожеланием. Условия события проверяются отдельно.")
+        submitted = st.button("Подобрать по этим параметрам", key="submit_query", type="primary", use_container_width=True)
+        if submitted:
+            try:
+                q_manual = Request(
+                    **{k: st.session_state[k] for k in ("city", "date", "event_format", "category", "budget", "languages", "preference")},
+                    hours=st.session_state.hours or None)
+                st.session_state.request = q_manual
+                st.session_state.intake_values = asdict(q_manual)
+                st.session_state.intake_error = ""
+                st.session_state.pop("validation_error", None)
+                st.rerun()
+            except ValueError as exc:
+                st.session_state.request = None
+                st.session_state.validation_error = str(exc)
+        st.caption("Доступные даты: 23.09–31.12.2026. Язык, длительность и пожелание можно не указывать.")
 
 if catalog.issues:
     st.warning(f"Исключено повреждённых строк: {len(catalog.issues)}. Итоги относятся только к корректной части каталога.")
@@ -139,6 +188,9 @@ if catalog.issues:
 if "validation_error" in st.session_state:
     st.error(st.session_state.validation_error)
     st.info("Исправьте параметры и повторите подбор.")
+    st.stop()
+
+if st.session_state.request is None:
     st.stop()
 
 q = st.session_state.request
