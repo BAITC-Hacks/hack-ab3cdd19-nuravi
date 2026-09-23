@@ -220,7 +220,9 @@ class AIService:
                   "Верни только JSON с полем approved_ids: список id подходящих цитат. При сомнении отклони."
         audit_payload = {"category": request.category, "format": request.event_format, "preference": request.preference,
                          "quotes": quotes}
-        auditor_order = ("NVIDIA", "OpenAI") if writer_name == "OpenAI" else ("OpenAI", "NVIDIA")
+        # OpenAI-only deployments should not waste a request on an unrelated
+        # Brev key that cannot authenticate to NVIDIA NIM.
+        auditor_order = ("OpenAI", "NVIDIA")
         for auditor_name in auditor_order:
             try:
                 verdict = self._chat(auditor_name, auditor, audit_payload,

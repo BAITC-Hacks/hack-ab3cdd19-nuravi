@@ -56,32 +56,47 @@ def failures(p, q):
 
 def language_count_preference(value):
     """Return an explicit requested number of languages, if present."""
+    return language_preference(value)[0]
+
+
+def language_preference(value):
+    """Split a language-count fact from any other requested qualities."""
     normalized = key(value)
-    match = re.search(r"\b(\d+)\s*(?:язык\w*|языков)\b", normalized)
-    if match:
-        return int(match.group(1))
-    words = {"двух": 2, "двумя": 2, "трех": 3, "тремя": 3, "четырех": 4,
-             "четырьмя": 4, "пяти": 5}
-    for word, count in words.items():
-        if re.search(rf"\b{word}\s+язык\w*\b", normalized):
-            return count
-    return None
+    match = re.search(
+        r"\b(?:(?:знани\w*|владени\w*|владе\w*|работа\w*\s+с)\s+)?"
+        r"(\d+|двух|двумя|трех|тремя|четырех|четырьмя|пяти)\s+язык\w*\b",
+        normalized,
+    )
+    if not match:
+        return None, normalized
+    words = {"двух": 2, "двумя": 2, "трех": 3, "тремя": 3,
+             "четырех": 4, "четырьмя": 4, "пяти": 5}
+    count = words.get(match.group(1), int(match.group(1)) if match.group(1).isdigit() else None)
+    remainder = (normalized[:match.start()] + " " + normalized[match.end():]).strip(" ,.;:")
+    remainder = re.sub(r"^(?:и|а также)\s+", "", remainder).strip()
+    return count, remainder
 
 
 def semantic_evidence(p, q, frequency=None):
-    requested_count = language_count_preference(q.preference)
+    requested_count, remainder = language_preference(q.preference)
     if requested_count is not None:
         if len(p.languages) < requested_count:
             return Decimal(0), []
         fact = f"Профиль поддерживает {len(p.languages)} языка: {', '.join(p.languages)}"
-        return Decimal(1), [{"factor": "Пожелание", "match": fact,
-                             "terms": [str(requested_count)], "field": "languages"}]
+        language_hit = {"factor": "Пожелание", "match": fact,
+                        "terms": [str(requested_count)], "field": "languages"}
+        if not remainder:
+            return Decimal(1), [language_hit]
+        relevance, text_hits = best_evidence(p.description, remainder, frequency)
+        return relevance, [language_hit, *text_hits] if relevance else []
     return best_evidence(p.description, q.preference, frequency)
 
 
 def score(p, q, frequency=None, semantic_override=None):
     semantic, hits = semantic_evidence(p, q, frequency)
-    if q.preference and semantic_override is not None and language_count_preference(q.preference) is None:
+    requested_count, remainder = language_preference(q.preference)
+    if q.preference and semantic_override is not None and remainder and \
+            (requested_count is None or len(p.languages) >= requested_count):
         ai_semantic = Decimal(str(semantic_override))
         if not ai_semantic.is_finite() or not 0 <= ai_semantic <= 1:
             raise ValueError("Семантическая оценка должна быть от 0 до 1")
@@ -118,7 +133,9 @@ def select(catalog, q, semantic_scores=None):
         override = semantic_scores.get(p.id) if semantic_scores is not None else None
         total, breakdown, hits, matches = score(p, q, frequency, override)
         local_semantic = semantic_evidence(p, q, frequency)[0] if override is not None else None
-        ai_used = (override is not None and q.preference and language_count_preference(q.preference) is None
+        requested_count, remainder = language_preference(q.preference)
+        ai_used = (override is not None and bool(remainder)
+                   and (requested_count is None or len(p.languages) >= requested_count)
                    and Decimal(str(override)) > local_semantic)
         ranked.append({"profile": p, "score": float(total), "breakdown": breakdown, "evidence": hits,
                        "semantic_source": "AI embeddings" if ai_used else "локальный поиск",

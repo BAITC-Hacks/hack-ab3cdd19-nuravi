@@ -201,6 +201,30 @@ def test_language_count_preference_understands_words(p, q, preference):
     assert select(catalog(trilingual), q)["candidates"][0]["breakdown"]["semantic"]["base_points"] == 20
 
 
+def test_compound_language_wish_requires_both_claims(p, q):
+    q = replace(q, preference="знание 3 языков и опыт фокусов")
+    languages = ("русский", "казахский", "английский")
+    no_tricks = replace(p, id="NO-TRICKS", languages=languages,
+                        description="Веду деловые форумы.")
+    with_tricks = replace(p, id="TRICKS", languages=languages,
+                          description="Показываю фокусы на корпоративных мероприятиях.")
+    two_languages = replace(p, id="TWO", languages=("русский", "казахский"),
+                            description=with_tricks.description)
+    result = select(catalog(no_tricks, with_tricks, two_languages), q)
+    by_id = {c["profile"].id: c for c in result["candidates"]}
+    assert by_id["NO-TRICKS"]["breakdown"]["semantic"]["base_points"] == 0
+    assert by_id["TWO"]["breakdown"]["semantic"]["base_points"] == 0
+    assert by_id["TRICKS"]["breakdown"]["semantic"]["base_points"] > 0
+    assert "фокус" in explain(by_id["TRICKS"], q).lower()
+    assert "фокус" in dict(recommendation_facts(by_id["TRICKS"], q))["Релевантность описания"].lower()
+
+
+def test_ai_override_cannot_bypass_language_count(p, q):
+    q = replace(q, preference="знание 3 языков и опыт фокусов")
+    result = select(catalog(p), q, {p.id: 0.9})
+    assert result["candidates"][0]["breakdown"]["semantic"]["base_points"] == 0
+
+
 def test_negative_preference_needs_negative_source_phrase(p, q):
     q = replace(q, preference="без конкурсов")
     with_contests = replace(p, id="CONTESTS", price=Decimal(100000),
@@ -225,6 +249,14 @@ def test_real_data_deterministic_and_shuffle_invariant():
     # Even removing ids and names, the actual factual texts must differ.
     stripped = [text.replace(c["profile"].id, "").replace(c["profile"].name, "") for c, text in zip(expected, explanations)]
     assert len(set(stripped)) == 3
+
+
+def test_dense_cards_show_concrete_description_details():
+    q = demo_request("Плотная категория · 14 ноября")
+    explanations = {c["profile"].id: explain(c, q) for c in select(load_catalog(), q)["candidates"]}
+    assert "сценарий" in explanations["HK-44923"]
+    assert "Без долгих речей" in explanations["HK-29829"]
+    assert "бизнес форумы на 3000 человек" in explanations["HK-44733"]
 
 
 def test_three_cards_have_complete_distinct_recommendation_facts():

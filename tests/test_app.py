@@ -27,6 +27,14 @@ def test_demo_ui(name):
         assert "Подобраны 3" in at.success[0].value
 
 
+def test_empty_result_gives_budget_specific_next_step():
+    at = AppTest.from_file(APP, default_timeout=20).run()
+    at.button(key="demo_4").click().run()
+    assert not at.exception
+    assert any("У всех профилей цена" in item.value for item in at.markdown)
+    assert not any("Попробуйте другую дату или скорректируйте" in item.value for item in at.markdown)
+
+
 def test_invalid_budget_and_recovery():
     at = AppTest.from_file(APP, default_timeout=20).run()
     at.number_input(key="budget").set_value(0)

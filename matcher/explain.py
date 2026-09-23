@@ -1,6 +1,7 @@
 """Template-only factual explanations; never influences eligibility or ranking."""
 
 from .text import best_evidence, sentences
+from .engine import language_preference
 
 
 FACTOR_LABELS = {
@@ -36,6 +37,24 @@ def availability_fact(profile, event_date):
     return f"На {event_date:%d.%m.%Y} дата присутствует в списке занятых дат — подрядчик недоступен."
 
 
+def informative_excerpt(description):
+    """Pick a concrete source passage when no specific wish was supplied."""
+    passages = sentences(description)
+    generic = ("приветствую", "добрый день", "здравствуйте", "меня зовут",
+               "я профессиональный", "всегда стараюсь", "с уважением")
+    candidates = [(i, sentence) for i, sentence in enumerate(passages)
+                  if len(sentence) >= 20 and not sentence.casefold().startswith(generic)]
+    if not candidates:
+        return passages[0] if passages else ""
+
+    def rank(item):
+        index, sentence = item
+        return (int("•" in sentence) * 4 + min(sum(ch.isdigit() for ch in sentence), 3)
+                + int(30 <= len(sentence) <= 210), -index)
+
+    return max(candidates, key=rank)[1]
+
+
 def recommendation_facts(candidate, q):
     """Facts displayed on a result card. They only use request/profile/score data."""
     p = candidate["profile"]
@@ -67,12 +86,18 @@ def recommendation_facts(candidate, q):
         relevance = "Пожелание в запросе не указано; описание не влияло на порядок."
     elif candidate.get("semantic_source") == "AI embeddings":
         quote = candidate.get("ai_quote")
-        relevance = (f"Сходство описания с пожеланием: {candidate['breakdown']['semantic']['value']:.2f} из 1. "
+        requested_count, _ = language_preference(q.preference)
+        language_fact = (f"Подтверждено не менее {requested_count} языков по списку профиля. "
+                         if requested_count is not None else "")
+        relevance = (language_fact + f"Сходство описания с пожеланием: {candidate['breakdown']['semantic']['value']:.2f} из 1. "
                      + (f"Проверенная фраза профиля: «{quote}». " if quote else
                         "Дословная фраза через AI-аудит не подтверждена. ")
                      + _score_suffix(candidate, 'semantic'))
     elif matched and candidate["evidence"][0].get("field") == "languages":
-        relevance = f"Пожелание подтверждено языками профиля: {matched}. {_score_suffix(candidate, 'semantic')}"
+        _, remainder = language_preference(q.preference)
+        extra = (f" В описании также найдено: «{candidate['evidence'][1]['match']}»."
+                 if remainder and len(candidate["evidence"]) > 1 else "")
+        relevance = f"Пожелание подтверждено языками профиля: {matched}.{extra} {_score_suffix(candidate, 'semantic')}"
     elif matched:
         relevance = f"Часть слов пожелания найдена в описании: «{matched}». {_score_suffix(candidate, 'semantic')}"
     elif p.description:
@@ -91,16 +116,14 @@ def explain(candidate, q):
         excerpt = ai_quote
     elif hit and hit[0].get("field") == "languages":
         excerpt = ""
-        reason = f"Пожелание подтверждено данными профиля: {hit[0]['match']}"
+        _, remainder = language_preference(q.preference)
+        extra = f"; в описании: «{hit[1]['match']}»" if remainder and len(hit) > 1 else ""
+        reason = f"Пожелание подтверждено данными профиля: {hit[0]['match']}{extra}"
     elif hit:
         excerpt = hit[0]["match"]
     else:
         _, format_hit = best_evidence(p.description, q.event_format)
-        passages = sentences(p.description)
-        informative = next((sentence for sentence in passages
-                            if len(sentence) >= 20 and not sentence.casefold().startswith(
-                                ("приветствую", "добрый день", "здравствуйте"))), "")
-        excerpt = format_hit[0]["match"] if format_hit else informative or (passages or [""])[0]
+        excerpt = format_hit[0]["match"] if format_hit else informative_excerpt(p.description)
     if len(excerpt) > 210:
         matched_terms = hit[0]["terms"] if hit else []
         positions = [excerpt.casefold().find(term) for term in matched_terms]
@@ -111,6 +134,10 @@ def explain(candidate, q):
     excerpt = excerpt.rstrip(" .!?")
     if ai_quote or not (hit and hit[0].get("field") == "languages"):
         reason = f"В описании {p.id}: «{excerpt}»" if excerpt else "Описание профиля отсутствует"
+    if ai_quote:
+        requested_count, _ = language_preference(q.preference)
+        if requested_count is not None:
+            reason = f"По списку профиля подтверждено языков: {len(p.languages)}; {reason}"
     if q.preference and not hit and not ai_quote:
         reason += "; подтверждения пожеланию не найдено"
     return (f"На {q.date:%d.%m.%Y} доступен по календарю; формат «{q.event_format}» подходит, цена от {money(p.price)} укладывается в бюджет. "

@@ -8,7 +8,7 @@ import streamlit as st
 from matcher.data import DATA, START, END, key, load_catalog
 from matcher.ai import AIService, AIUnavailable
 from matcher.demo import DEMOS, demo_request
-from matcher.engine import (Request, select, failures, language_count_preference,
+from matcher.engine import (Request, select, failures, language_preference,
                             REASONS, WEIGHTS)
 from matcher.explain import (comparison_rows, comparison_summary, explain,
                              limitations, money, recommendation_facts)
@@ -20,11 +20,6 @@ st.html("<style>" + Path(__file__).with_name("ui.css").read_text(encoding="utf-8
 @st.cache_data
 def read_catalog(modified):
     return load_catalog()
-
-
-@st.cache_resource
-def ai_service():
-    return AIService()
 
 
 try:
@@ -91,7 +86,7 @@ with st.container(key="hero"):
         st.title("Подрядчик для вашего события — за минуту")
         st.write("Задайте условия. Сервис проверит занятость и бюджет, затем покажет до трёх вариантов с понятными причинами выбора.")
     with hero_fact:
-        st.markdown('<div class="hero-note"><strong>До 3</strong><span>проверенных вариантов с объяснением для каждого</span></div>',
+        st.markdown('<div class="hero-note"><strong>До 3</strong><span>вариантов по данным каталога с объяснением для каждого</span></div>',
                     unsafe_allow_html=True)
 
 st.subheader("Попробуйте готовый сценарий")
@@ -152,7 +147,9 @@ ai_quotes = {}
 ai_status = ""
 ai_user_status = ""
 if st.session_state.ai_enabled:
-    service = ai_service()
+    # A fresh service reloads the shared on-disk cache and current .env on each
+    # submission; a process-wide resource could keep stale evidence indefinitely.
+    service = AIService()
     if not service.available:
         ai_status = "Ключи AI не найдены; показан локальный результат"
         ai_user_status = "ИИ недоступен: ключи не найдены. Показан обычный подбор."
@@ -161,17 +158,20 @@ if st.session_state.ai_enabled:
             eligible_profiles = [p for p in catalog.profiles if key(q.category) in
                                  {key(category) for category in p.categories}
                                  and key(p.city) == key(q.city) and not failures(p, q)]
-            requested_languages = language_count_preference(q.preference)
-            if requested_languages is not None:
+            requested_languages, remaining_preference = language_preference(q.preference)
+            if requested_languages is not None and not remaining_preference:
                 ai_status = f"Пожелание проверено по спискам языков профилей: требуется не менее {requested_languages}"
                 ai_user_status = "Пожелание проверено по фактическому списку языков каждого профиля."
             else:
-                ai_quotes, evidence_status = service.evidence([{"profile": p} for p in eligible_profiles], q)
+                if requested_languages is not None:
+                    eligible_profiles = [p for p in eligible_profiles if len(p.languages) >= requested_languages]
+                semantic_query = replace(q, preference=remaining_preference)
+                ai_quotes, evidence_status = service.evidence([{"profile": p} for p in eligible_profiles], semantic_query)
                 grounded = [p for p in eligible_profiles if p.id in ai_quotes]
                 ai_scored = False
                 if grounded:
                     try:
-                        scores = service.semantic_scores(grounded, q.preference)
+                        scores = service.semantic_scores(grounded, remaining_preference)
                         r = select(catalog, q, scores)
                         ai_scored = any(c["semantic_source"] == "AI embeddings" for c in r["candidates"])
                         ai_status = "Embeddings OpenAI рассчитаны для профилей с подтверждённой фразой"
@@ -183,7 +183,9 @@ if st.session_state.ai_enabled:
                 elif ai_quotes:
                     ai_user_status = "ИИ нашёл проверенные фразы; оценка рассчитана локально."
                 else:
-                    ai_user_status = "ИИ не нашёл подтверждения пожеланию. Показан локальный подбор."
+                    ai_user_status = ("Дополнительные цитаты через ИИ не подтверждены; локальные совпадения сохранены."
+                                      if any(c["evidence"] for c in r["candidates"]) else
+                                      "ИИ не нашёл подтверждения пожеланию. Показан локальный подбор.")
         else:
             ai_status = "Укажите пожелание, чтобы ИИ сравнил смысл описаний"
             ai_user_status = "Чтобы ИИ уточнил подбор, добавьте пожелание к подрядчику."
@@ -219,7 +221,12 @@ elif r["status"] == "no_matches":
         leading_reasons = sorted(((count, REASONS[code].lower()) for code, count in r["reasons"].items() if count), reverse=True)
         if leading_reasons:
             st.write("Основные причины: " + ", ".join(f"{label} — {count}" for count, label in leading_reasons[:3]) + ".")
-        st.write("Попробуйте другую дату или скорректируйте ограничения.")
+        if r["reasons"]["budget"] == r["city_count"]:
+            st.write("У всех профилей цена «от» выше бюджета. Чтобы увидеть варианты, увеличьте бюджет или выберите другую категорию.")
+        elif r["reasons"]["busy"] == r["city_count"]:
+            st.write("Все профили заняты на эту дату. Попробуйте другую дату.")
+        else:
+            st.write("Проверьте перечисленные ограничения или попробуйте другую дату.")
 else:
     if r["eligible"] < 3:
         shortage = (f"Профилей этой категории в городе: {r['city_count']}."
@@ -247,7 +254,7 @@ else:
             st.markdown("**Почему подходит**")
             st.write(explain(c, q))
             if c.get("ai_quote"):
-                st.caption(f"Проверенная фраза из описания: «{c['ai_quote']}»")
+                st.caption("Цитата из описания проверена ИИ и сверена с исходным профилем.")
             with st.expander("Почему рекомендован"):
                 for label, fact in recommendation_facts(c, q):
                     st.markdown(f"**{label}.** {fact}")
