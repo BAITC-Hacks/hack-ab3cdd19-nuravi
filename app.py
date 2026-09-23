@@ -84,20 +84,24 @@ def understood(values):
 
 
 with st.container(key="hero"):
-    st.markdown('<span class="hero-kicker">NURAVI / HACKALEM AI</span>', unsafe_allow_html=True)
+    st.markdown('<div class="hero-kicker"><span class="brand-mark" aria-hidden="true"></span>NURAVI AI</div>',
+                unsafe_allow_html=True)
     st.title("Кого вы ищете?")
-    st.write("Опишите событие своими словами. ИИ уточнит недостающее и подберёт до трёх подрядчиков.")
+    st.write("Опишите событие своими словами. ИИ уточнит детали и предложит подходящих подрядчиков.")
 
-with st.container(border=True, key="prompt_search"):
+with st.container(key="prompt_search"):
     with st.form("prompt_form", clear_on_submit=True):
         message = st.text_area("Ваш запрос" if not st.session_state.intake_values else "Уточните текущий запрос",
-                               key="prompt_message", height=105, max_chars=1000,
-                               placeholder="Например: нужен ведущий для корпоратива в Алматы 14 ноября, до 1,5 млн ₸, на русском, на 6 часов")
+                               key="prompt_message", height=138, max_chars=1000, label_visibility="collapsed",
+                               placeholder="Например, нужен ведущий для корпоратива в Алматы 14 ноября…")
         action_label = ("Ответить и продолжить" if st.session_state.intake_values and
                         missing(st.session_state.intake_values) else
                         "Уточнить подбор" if st.session_state.request else "Найти подрядчика")
-        prompt_submitted = st.form_submit_button(action_label, key="submit_prompt",
-                                                 type="primary", use_container_width=True)
+        composer_footer = st.columns([2.6, 1], gap="small", vertical_alignment="center")
+        composer_footer[0].caption("Начните с идеи — детали можно уточнить позже")
+        with composer_footer[1]:
+            prompt_submitted = st.form_submit_button(action_label, key="submit_prompt",
+                                                     type="primary", use_container_width=True)
     if prompt_submitted:
         if not message.strip():
             st.warning("Опишите, кого ищете, или откройте ручной ввод ниже.")
@@ -125,27 +129,32 @@ with st.container(border=True, key="prompt_search"):
                 st.session_state.request = None
                 st.session_state.intake_error = ("ИИ не смог прочитать условия. "
                                                  "Заполните параметры вручную — ваш текст сохранён ниже.")
-    if st.session_state.intake_error:
-        st.warning(st.session_state.intake_error)
-        st.caption(f"Ваш запрос: {st.session_state.last_prompt}")
-    elif st.session_state.intake_values:
-        st.markdown("**Я понял:** " + understood(st.session_state.intake_values))
-        if missing(st.session_state.intake_values):
-            st.info(question(st.session_state.intake_values))
+if st.session_state.intake_error or st.session_state.intake_values:
+    with st.container(key="search_feedback"):
+        if st.session_state.intake_error:
+            st.warning(st.session_state.intake_error)
+            st.caption(f"Ваш запрос: {st.session_state.last_prompt}")
         else:
-            st.caption("Параметры можно исправить в форме ниже. Подбор уже выполнен.")
-        if st.button("Начать новый запрос", key="new_query"):
-            st.session_state.request = None
-            st.session_state.intake_values = {}
-            st.session_state.intake_error = ""
-            st.session_state.last_prompt = ""
-            for field, value in {"city": "Алматы", "category": "Ведущий", "date": START,
-                                 "event_format": "корпоратив", "budget": 0, "languages": [],
-                                 "hours": 0.0, "preference": ""}.items():
-                st.session_state[field] = value
-            st.rerun()
+            st.markdown("**Я понял:** " + understood(st.session_state.intake_values))
+            if missing(st.session_state.intake_values):
+                st.info(question(st.session_state.intake_values))
+            else:
+                st.caption("Параметры можно исправить в форме ниже. Подбор уже выполнен.")
+            if st.button("Начать новый запрос", key="new_query"):
+                st.session_state.request = None
+                st.session_state.intake_values = {}
+                st.session_state.intake_error = ""
+                st.session_state.last_prompt = ""
+                for field, value in {"city": "Алматы", "category": "Ведущий", "date": START,
+                                     "event_format": "корпоратив", "budget": 0, "languages": [],
+                                     "hours": 0.0, "preference": ""}.items():
+                    st.session_state[field] = value
+                st.rerun()
 
-with st.expander("Изменить параметры или заполнить вручную", expanded=bool(st.session_state.intake_error)):
+with st.container(key="manual_access"):
+    manual_form = st.expander("Изменить параметры или заполнить вручную",
+                              expanded=bool(st.session_state.intake_error))
+with manual_form:
     with st.container(border=True, key="event_form"):
         st.caption("Обязательные поля: город, категория, дата, формат и бюджет.")
         options = choices(catalog)
