@@ -54,7 +54,9 @@ class Profile:
     formats: tuple
     languages: tuple
     max_hours: object
-    busy_dates: frozenset
+    # None means that the source contains no availability data. An empty
+    # frozenset would incorrectly look like confirmed availability every day.
+    busy_dates: object
     description: str
     synthetic: bool = False
     city_imputed: bool = False
@@ -85,11 +87,10 @@ def load_catalog(path=DATA):
                 raise ValueError("нет id, имени или города")
             if r["id"] in seen:
                 raise ValueError("повторяющийся id")
-            # An explicit [] means a known empty calendar; a blank cell is unknown.
-            if not r["busy_dates"]:
-                raise ValueError("календарь отсутствует; доступность неизвестна")
-            busy = frozenset(date.fromisoformat(d) for d in parts(r["busy_dates"], False)) if r["busy_dates"] != "[]" else frozenset()
-            if any(d < START or d > END for d in busy):
+            busy = None if key(r["busy_dates"]) in {"", "[]", "null", "none"} else frozenset(
+                date.fromisoformat(d) for d in parts(r["busy_dates"], False)
+            )
+            if busy is not None and any(d < START or d > END for d in busy):
                 raise ValueError("занятая дата вне окна календаря")
             hours = None if key(r["max_hours"]) in {"", "null", "none"} else number(r["max_hours"], "max_hours")
             profiles.append(Profile(r["id"], r["anon_name"], parts(r["categories"]), r["city"],

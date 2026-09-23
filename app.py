@@ -45,15 +45,14 @@ if "request" not in st.session_state:
 with st.sidebar:
     st.markdown("### Параметры мероприятия")
     st.selectbox("Демо-сценарий", list(DEMOS), key="demo", on_change=fill_demo)
-    with st.form("request_form"):
-        st.selectbox("Город", sorted({p.city for p in catalog.profiles}), key="city")
-        st.selectbox("Категория подрядчика", sorted({c for p in catalog.profiles for c in p.categories}), key="category")
-        st.date_input("Дата мероприятия", min_value=START, max_value=END, format="DD.MM.YYYY", key="date")
-        st.selectbox("Тип мероприятия", sorted({f for p in catalog.profiles for f in p.formats}), key="event_format")
-        st.number_input("Бюджет, ₸", min_value=0, step=50000, key="budget")
-        st.multiselect("Языки · необязательно", sorted({l for p in catalog.profiles for l in p.languages}), key="languages", help="Подрядчик должен поддерживать все выбранные языки.")
-        st.number_input("Длительность, ч · 0 = не указана", min_value=0.0, step=0.5, key="hours")
-        submitted = st.form_submit_button("Подобрать подрядчиков", type="primary", width="stretch")
+    st.selectbox("Город", sorted({p.city for p in catalog.profiles}), key="city")
+    st.selectbox("Категория подрядчика", sorted({c for p in catalog.profiles for c in p.categories}), key="category")
+    st.date_input("Дата мероприятия", min_value=START, max_value=END, format="DD.MM.YYYY", key="date")
+    st.selectbox("Тип мероприятия", sorted({f for p in catalog.profiles for f in p.formats}), key="event_format")
+    st.number_input("Бюджет, ₸", min_value=0, step=50000, key="budget")
+    st.multiselect("Языки · необязательно", sorted({l for p in catalog.profiles for l in p.languages}), key="languages", help="Подрядчик должен поддерживать все выбранные языки.")
+    st.number_input("Длительность, ч · 0 = не указана", min_value=0.0, step=0.5, key="hours")
+    submitted = st.button("Подобрать подрядчиков", type="primary", width="stretch")
     if submitted:
         try:
             st.session_state.request = Request(
@@ -118,7 +117,7 @@ else:
                 st.text(p.description or "Описание отсутствует")
                 st.json({"id": p.id, "event_formats": p.formats, "languages": p.languages,
                          "max_hours": str(p.max_hours) if p.max_hours is not None else None,
-                         "busy_dates": sorted(d.isoformat() for d in p.busy_dates),
+                         "busy_dates": sorted(d.isoformat() for d in p.busy_dates) if p.busy_dates else None,
                          "synthetic": p.synthetic, "city_imputed": p.city_imputed, "price_imputed": p.price_imputed})
 
 st.subheader("Почему другие не попали")
@@ -134,7 +133,13 @@ with col2:
 
 with st.expander("Какие именно профили исключены"):
     names = {p.id: p.name for p in catalog.profiles}
-    st.table([{"ID": pid, "Имя": names[pid], "Причины": "; ".join(REASONS[x] for x in reasons)} for pid, reasons in sorted(r["rejected"].items())]) if r["rejected"] else st.write("Нет исключений по дополнительным условиям.")
+    if r["rejected"]:
+        st.table([
+            {"ID": pid, "Имя": names[pid], "Причины": "; ".join(REASONS[x] for x in reasons)}
+            for pid, reasons in sorted(r["rejected"].items())
+        ])
+    else:
+        st.write("Нет исключений по дополнительным условиям.")
 
 with st.expander("Что меняется на другой дате", expanded=False):
     other_date = st.date_input("Сравнить с датой", value=q.date + timedelta(days=1) if q.date < END else q.date - timedelta(days=1), min_value=START, max_value=END, format="DD.MM.YYYY")
@@ -143,6 +148,7 @@ with st.expander("Что меняется на другой дате", expanded=
     st.write("Топ на второй дате: " + (", ".join(f"{c['profile'].name} ({c['profile'].id})" for c in other["candidates"]) or "никто не проходит"))
     changes = [{"ID": p.id, "Имя": p.name, f"{q.date:%d.%m.%Y}": "занят" if q.date in p.busy_dates else "свободен", f"{other_date:%d.%m.%Y}": "занят" if other_date in p.busy_dates else "свободен"}
                for p in catalog.profiles if p.city == q.city and q.category in p.categories
+               and p.busy_dates
                and (q.date in p.busy_dates) != (other_date in p.busy_dates)]
     if changes:
         st.table(changes)
@@ -150,7 +156,7 @@ with st.expander("Что меняется на другой дате", expanded=
         st.caption("Занятость этой категории не изменилась; выдача может остаться той же.")
 
 with st.expander("Как принято решение · аудит подбора"):
-    st.write("Жёсткие фильтры: категория → город → дата → бюджет → формат → все выбранные языки → длительность. max_hours=null не исключает профиль.")
+    st.write("Жёсткие фильтры: категория → город → известный календарь → дата → бюджет → формат → все выбранные языки → длительность. Пустой busy_dates не считается подтверждённой доступностью; max_hours=null не исключает профиль.")
     st.write("Веса: формат 25%, язык 20%, бюджет 20%, длительность 15%, текст 20%. Неуказанные язык и длительность исключаются из знаменателя; оставшиеся веса нормируются к 100. При указанной длительности max_hours=null даёт 0 баллов за этот фактор.")
     st.write("Бюджет: цена / бюджет. Среди допустимых цен выше балл у цены ближе к бюджету; это не оценка качества и не рекомендация потратить больше.")
     st.write("Текст: доля подтверждённых групп «формат» и выбранных языков по явным словам в description. Стиль, масштаб, аудитория и опыт без соответствующих параметров запроса не дают бонусов. Рекламные заявления не считаются рейтингом.")

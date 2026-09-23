@@ -1,4 +1,5 @@
 from datetime import date
+import sys
 from .engine import Request
 
 DEMOS = {
@@ -15,6 +16,8 @@ def demo_request(name):
 
 
 if __name__ == "__main__":
+    if hasattr(sys.stdout, "reconfigure"):
+        sys.stdout.reconfigure(encoding="utf-8")
     from time import perf_counter
     from .data import load_catalog
     from .engine import select

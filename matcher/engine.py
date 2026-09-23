@@ -6,7 +6,7 @@ import re
 
 from .data import START, END, DAYS, clean, key, number
 
-REASONS = {"busy": "Заняты на дату", "budget": "Выше бюджета", "format": "Не работают с форматом",
+REASONS = {"availability_unknown": "Нет данных о занятости", "busy": "Заняты на дату", "budget": "Выше бюджета", "format": "Не работают с форматом",
            "language": "Не подходят по языку", "duration": "Не подходят по длительности"}
 WEIGHTS = {"format": 25, "language": 20, "budget": 20, "duration": 15, "semantic": 20}
 # Only literal word stems in the description count. No inferred quality or experience.
@@ -42,7 +42,9 @@ class Request:
 
 def failures(p, q):
     return tuple(k for k, fail in (
-        ("busy", q.date in p.busy_dates), ("budget", p.price > q.budget),
+        ("availability_unknown", not p.busy_dates),
+        ("busy", bool(p.busy_dates) and q.date in p.busy_dates),
+        ("budget", p.price > q.budget),
         ("format", key(q.event_format) not in {key(v) for v in p.formats}),
         ("language", not set(q.languages).issubset({key(v) for v in p.languages})),
         ("duration", q.hours is not None and p.max_hours is not None and q.hours > p.max_hours)
@@ -86,7 +88,8 @@ def select(catalog, q):
     remaining = city
     for reason, label in REASONS.items():
         remaining = [p for p in remaining if reason not in rejected[p.id]]
-        funnel.append((label.replace("Заняты на дату", "Доступны на дату") if reason == "busy" else
+        funnel.append(("Есть данные о занятости" if reason == "availability_unknown" else
+                       label.replace("Заняты на дату", "Доступны на дату") if reason == "busy" else
                        {"budget": "Прошли бюджет", "format": "Прошли формат", "language": "Прошли язык", "duration": "Прошли длительность"}[reason], len(remaining)))
     ranked = []
     for p in remaining:

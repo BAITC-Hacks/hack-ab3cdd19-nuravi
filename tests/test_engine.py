@@ -20,7 +20,8 @@ def q():
 def p():
     # Test-only fixture, never loaded into the demo catalog.
     return Profile("TEST-1", "Тестовый профиль", ("Ведущий",), "Алматы", Decimal(400000),
-                   ("корпоратив",), ("русский", "казахский"), Decimal(8), frozenset(),
+                   ("корпоратив",), ("русский", "казахский"), Decimal(8),
+                   frozenset({date(2026, 10, 1)}),
                    "Веду корпоративы на русском языке.")
 
 
@@ -56,7 +57,17 @@ def test_all_busy_and_overlapping_reasons(p, q):
     assert result["status"] == "no_matches"
     assert result["reasons"]["busy"] == result["reasons"]["budget"] == 3
     assert len(result["rejected"]) == 3
-    assert [n for _, n in result["funnel"]] == [3, 3, 0, 0, 0, 0, 0]
+    assert [n for _, n in result["funnel"]] == [3, 3, 3, 0, 0, 0, 0, 0]
+
+
+@pytest.mark.parametrize("empty_calendar", [None, frozenset()])
+def test_unknown_availability_is_not_treated_as_free(p, q, empty_calendar):
+    unknown = replace(p, busy_dates=empty_calendar)
+    result = select(catalog(unknown), q)
+    assert result["status"] == "no_matches"
+    assert result["reasons"]["availability_unknown"] == 1
+    assert result["rejected"] == {p.id: ("availability_unknown",)}
+    assert "данных о занятости нет" in " ".join(limitations(unknown))
 
 
 @pytest.mark.parametrize("count", [1, 2, 3, 5])
@@ -141,7 +152,8 @@ def test_unknown_description(p, q):
 
 
 def test_stable_ties_use_busy_share_then_id(p, q):
-    profiles = [replace(p, id="B"), replace(p, id="A"), replace(p, id="0", busy_dates=frozenset({START}))]
+    profiles = [replace(p, id="B"), replace(p, id="A"),
+                replace(p, id="0", busy_dates=frozenset({date(2026, 10, 1), END}))]
     r = select(catalog(*profiles), q)
     assert [c["profile"].id for c in r["candidates"]] == ["A", "B", "0"]
 

@@ -32,7 +32,7 @@ def test_source_integrity():
     ("id", ""), ("anon_name", ""), ("city", ""), ("categories", ""),
     ("price_from_kzt", ""), ("price_from_kzt", "NaN"), ("price_from_kzt", "-2"),
     ("event_formats", ""), ("languages", ""), ("max_hours", "broken"),
-    ("max_hours", "-5"), ("busy_dates", "oops"), ("busy_dates", ""),
+    ("max_hours", "-5"), ("busy_dates", "oops"),
     ("busy_dates", "2027-01-01"), ("synthetic", "yes"), ("price_imputed", ""),
 ])
 def test_bad_rows_quarantined(tmp_path, raw, field, value):
@@ -59,12 +59,13 @@ def test_malformed_row_does_not_reserve_id(tmp_path, raw):
     assert len(c.profiles) == 1 and len(c.issues) == 1
 
 
-def test_null_hours_and_explicit_empty_calendar(tmp_path, raw):
-    raw.update(max_hours="null", busy_dates="[]", description="")
+@pytest.mark.parametrize("empty_calendar", ["", "[]", "null"])
+def test_null_hours_and_empty_calendar_are_unknown(tmp_path, raw, empty_calendar):
+    raw.update(max_hours="null", busy_dates=empty_calendar, description="")
     c = load_catalog(write_rows(tmp_path, [raw]))
     assert not c.issues
     assert c.profiles[0].max_hours is None
-    assert not c.profiles[0].busy_dates
+    assert c.profiles[0].busy_dates is None
 
 
 def test_whitespace_and_pipe_normalization(tmp_path, raw):

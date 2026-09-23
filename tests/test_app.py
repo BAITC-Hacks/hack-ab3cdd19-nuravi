@@ -46,3 +46,11 @@ def test_submit_custom_query_without_optional_fields():
     assert not at.exception
     assert at.session_state.request.hours is None
     assert at.session_state.request.languages == ()
+
+
+def test_main_controls_have_submit_button_without_form_warning():
+    at = AppTest.from_file(APP, default_timeout=20).run()
+    assert not at.exception
+    assert not at.error
+    assert not at.warning
+    assert any(button.label == "Подобрать подрядчиков" for button in at.button)

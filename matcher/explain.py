@@ -9,7 +9,8 @@ def money(value):
 def explain(candidate, q):
     p = candidate["profile"]
     facts = [f"цена от {money(p.price)} при бюджете {money(q.budget)}",
-             f"на {q.date:%d.%m.%Y} занятость не указана", f"формат «{q.event_format}» есть в профиле"]
+             f"на {q.date:%d.%m.%Y} свободен по календарю датасета",
+             f"формат «{q.event_format}» есть в профиле"]
     if q.languages:
         facts.append("языки: " + ", ".join(q.languages))
     if q.hours is not None and p.max_hours is not None:
@@ -25,6 +26,8 @@ def explain(candidate, q):
 
 def limitations(p):
     notes = ["Цена «от» — итоговую стоимость необходимо уточнить."]
+    if not p.busy_dates:
+        notes.append("busy_dates пуст: данных о занятости нет, доступность подтвердить нельзя.")
     if p.max_hours is None:
         notes.append("max_hours=null: ограничение неприменимо; длительность не подтверждена и не даёт баллов.")
     else:
