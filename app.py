@@ -39,6 +39,8 @@ st.session_state.setdefault("intake_values", {})
 st.session_state.setdefault("intake_error", "")
 st.session_state.setdefault("last_prompt", "")
 st.session_state.setdefault("ai_enabled", False)
+st.session_state.setdefault("quick_city", None)
+st.session_state.setdefault("quick_date", None)
 st.session_state.setdefault("city", "Алматы")
 st.session_state.setdefault("category", "Ведущий")
 st.session_state.setdefault("date", START)
@@ -61,6 +63,36 @@ def sync_manual(values):
         elif field == "budget":
             value = int(value)
         st.session_state[field] = value
+
+
+def reset_search():
+    st.session_state.request = None
+    st.session_state.intake_values = {}
+    st.session_state.intake_error = ""
+    st.session_state.last_prompt = ""
+    st.session_state.quick_city = None
+    st.session_state.quick_date = None
+    for field, value in {"city": "Алматы", "category": "Ведущий", "date": START,
+                         "event_format": "корпоратив", "budget": 0, "languages": [],
+                         "hours": 0.0, "preference": ""}.items():
+        st.session_state[field] = value
+
+
+def submit_manual():
+    try:
+        q_manual = Request(
+            **{field: st.session_state[field] for field in
+               ("city", "date", "event_format", "category", "budget", "languages", "preference")},
+            hours=st.session_state.hours or None)
+        st.session_state.request = q_manual
+        st.session_state.intake_values = asdict(q_manual)
+        st.session_state.intake_error = ""
+        st.session_state.quick_city = None
+        st.session_state.quick_date = None
+        st.session_state.pop("validation_error", None)
+    except ValueError as exc:
+        st.session_state.request = None
+        st.session_state.validation_error = str(exc)
 
 
 def understood(values):
@@ -144,7 +176,19 @@ with st.container(key="prompt_search"):
                         missing(st.session_state.intake_values) else
                         "Уточнить подбор" if st.session_state.request else "Найти подрядчика")
         composer_footer = st.columns([2.6, 1], gap="small", vertical_alignment="center")
-        composer_footer[0].caption("Можно начать с «Мне нужен ведущий»")
+        with composer_footer[0]:
+            with st.container(horizontal=True, vertical_alignment="center", gap="small"):
+                selected_date = st.session_state.quick_date
+                date_label = f"{selected_date:%d.%m.%Y}" if selected_date else "Дата"
+                with st.popover(date_label, icon=":material/event:", key="quick_date_chip"):
+                    st.date_input("Дата события", value=None, min_value=START, max_value=END,
+                                  format="DD.MM.YYYY", key="quick_date",
+                                  help="Необязательно. Выбор здесь имеет приоритет над датой в тексте и проверяет занятость подрядчиков.")
+                with st.popover(st.session_state.quick_city or "Город", icon=":material/location_on:",
+                                key="quick_city_chip"):
+                    st.selectbox("Город", choices(catalog)["cities"], index=None,
+                                 placeholder="Выберите город", key="quick_city",
+                                 help="Необязательно. Выбор здесь имеет приоритет над городом в тексте.")
         with composer_footer[1]:
             prompt_submitted = st.form_submit_button(action_label, key="submit_prompt",
                                                      type="primary", use_container_width=True)
@@ -153,10 +197,22 @@ with st.container(key="prompt_search"):
             st.warning("Опишите, кого ищете, или откройте ручной ввод ниже.")
         else:
             st.session_state.last_prompt = message.strip()
+            quick_city = st.session_state.quick_city
+            quick_date = st.session_state.quick_date
+            previous = dict(st.session_state.intake_values)
+            if quick_city:
+                previous["city"] = quick_city
+                st.session_state.city = quick_city
+            if quick_date:
+                previous["date"] = quick_date
+                st.session_state.date = quick_date
             try:
                 with st.spinner("ИИ разбирает ваш запрос…"):
-                    values = AIService().interpret(message.strip(), st.session_state.intake_values,
-                                                    catalog, date.today())
+                    values = dict(AIService().interpret(message.strip(), previous, catalog, date.today()))
+                if quick_city:
+                    values["city"] = quick_city
+                if quick_date:
+                    values["date"] = quick_date
                 st.session_state.intake_values = values
                 st.session_state.intake_error = ""
                 st.session_state.request = to_request(values) if not missing(values) else None
@@ -192,16 +248,7 @@ if st.session_state.intake_error or st.session_state.intake_values:
                     st.caption("Позже уточним: " + ", ".join(labels[field] for field in remaining) + ".")
             else:
                 st.caption("Параметры можно исправить в форме ниже. Подбор уже выполнен.")
-            if st.button("Начать новый запрос", key="new_query"):
-                st.session_state.request = None
-                st.session_state.intake_values = {}
-                st.session_state.intake_error = ""
-                st.session_state.last_prompt = ""
-                for field, value in {"city": "Алматы", "category": "Ведущий", "date": START,
-                                     "event_format": "корпоратив", "budget": 0, "languages": [],
-                                     "hours": 0.0, "preference": ""}.items():
-                    st.session_state[field] = value
-                st.rerun()
+            st.button("Начать новый запрос", key="new_query", on_click=reset_search)
 
 if st.session_state.request is None and st.session_state.intake_values and not st.session_state.intake_error:
     show_preliminary(st.session_state.intake_values)
@@ -229,20 +276,8 @@ with manual_form:
                       max_chars=240, placeholder="Например: спокойный стиль и опыт деловых мероприятий")
         st.toggle("Уточнить рекомендации с ИИ", key="ai_enabled",
                   help="ИИ сравнивает описания с пожеланием. Условия события проверяются отдельно.")
-        submitted = st.button("Подобрать по этим параметрам", key="submit_query", type="primary", use_container_width=True)
-        if submitted:
-            try:
-                q_manual = Request(
-                    **{k: st.session_state[k] for k in ("city", "date", "event_format", "category", "budget", "languages", "preference")},
-                    hours=st.session_state.hours or None)
-                st.session_state.request = q_manual
-                st.session_state.intake_values = asdict(q_manual)
-                st.session_state.intake_error = ""
-                st.session_state.pop("validation_error", None)
-                st.rerun()
-            except ValueError as exc:
-                st.session_state.request = None
-                st.session_state.validation_error = str(exc)
+        st.button("Подобрать по этим параметрам", key="submit_query", type="primary",
+                  use_container_width=True, on_click=submit_manual)
         st.caption("Доступные даты: 23.09–31.12.2026. Язык, длительность и пожелание можно не указывать.")
 
 if catalog.issues:

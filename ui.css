@@ -11,6 +11,7 @@
   color: var(--ink);
 }
 
+header[data-testid="stHeader"],
 [data-testid="stToolbar"],
 #MainMenu {
   display: none !important;
@@ -145,7 +146,7 @@ h1, h2, h3 {
   line-height: 1.4;
 }
 
-.st-key-prompt_search [data-testid="stForm"] button {
+.st-key-prompt_search [data-testid="stFormSubmitButton"] button {
   min-height: 40px;
   border: 1px solid #234b44 !important;
   border-radius: 12px !important;
@@ -157,23 +158,50 @@ h1, h2, h3 {
   transition: background-color .18s ease, box-shadow .18s ease, transform .18s ease;
 }
 
-.st-key-prompt_search [data-testid="stForm"] button::after {
+.st-key-prompt_search [data-testid="stFormSubmitButton"] button::after {
   content: "→";
   margin-left: .6rem;
   font-size: 1.15em;
   font-weight: 400;
 }
 
-.st-key-prompt_search [data-testid="stForm"] button:hover {
+.st-key-prompt_search [data-testid="stFormSubmitButton"] button:hover {
   border-color: #163a34 !important;
   background: #163a34 !important;
   box-shadow: 0 7px 18px rgba(35, 75, 68, .18) !important;
   transform: translateY(-1px);
 }
 
-.st-key-prompt_search [data-testid="stForm"] button:focus-visible {
+.st-key-prompt_search [data-testid="stFormSubmitButton"] button:focus-visible {
   outline: 2px solid #609d8c;
   outline-offset: 3px;
+}
+
+.st-key-prompt_search [data-testid="stPopoverButton"] {
+  min-height: 40px;
+  width: auto;
+  max-width: 100%;
+  padding: .45rem .85rem;
+  border: 1px solid #dce6e1 !important;
+  border-radius: 999px !important;
+  background: #f9fbfa !important;
+  box-shadow: none !important;
+  color: #425c53 !important;
+  font-size: .86rem;
+  font-weight: 550;
+  white-space: nowrap;
+  transition: border-color .18s ease, background-color .18s ease, color .18s ease;
+}
+
+.st-key-prompt_search [data-testid="stPopoverButton"]:hover {
+  border-color: #9abdaf !important;
+  background: #f1f8f4 !important;
+  color: #234b44 !important;
+}
+
+.st-key-prompt_search [data-testid="stPopoverButton"]:focus-visible {
+  outline: 2px solid #609d8c;
+  outline-offset: 2px;
 }
 
 .st-key-search_feedback {
@@ -336,8 +364,8 @@ h1, h2, h3 {
 
 @media (prefers-reduced-motion: reduce) {
   .st-key-prompt_search,
-  .st-key-prompt_search [data-testid="stForm"] button,
+  .st-key-prompt_search [data-testid="stFormSubmitButton"] button,
   .st-key-manual_access summary { transition: none; }
   .st-key-prompt_search:hover,
-  .st-key-prompt_search [data-testid="stForm"] button:hover { transform: none; }
+  .st-key-prompt_search [data-testid="stFormSubmitButton"] button:hover { transform: none; }
 }

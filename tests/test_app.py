@@ -29,10 +29,52 @@ def mock_demo(monkeypatch, name="Плотная категория · 14 ноя�
 def test_first_screen_is_prompt_first_without_demo_cards():
     at = app()
     assert not at.exception and not at.error and not at.warning
+    assert at.date_input(key="quick_date").value is None
+    assert at.selectbox(key="quick_city").value is None
     assert any("Кого вы ищете?" in title.value for title in at.title)
     assert at.button(key="submit_prompt").label == "Найти подрядчика"
     assert not at.success and not at.info
     assert not any(button.key.startswith("demo_") for button in at.button)
+
+
+def test_quick_filters_override_prompt_facts_and_reset_with_new_request(monkeypatch):
+    mock_demo(monkeypatch)
+    at = app()
+    at.date_input(key="quick_date").set_value(date(2026, 10, 10))
+    at.selectbox(key="quick_city").set_value("Астана")
+    at = submit_prompt(at, "Ведущий для корпоратива в Алматы 14 ноября, бюджет 1,5 млн тенге")
+    assert not at.exception and not at.error
+    assert at.session_state.request.city == "Астана"
+    assert at.session_state.request.date == date(2026, 10, 10)
+    assert at.selectbox(key="quick_city").value == "Астана"
+    assert at.date_input(key="quick_date").value == date(2026, 10, 10)
+    assert at.selectbox(key="city").value == "Астана"
+    assert at.date_input(key="date").value == date(2026, 10, 10)
+    at.button(key="new_query").click().run()
+    assert not at.exception
+    assert at.selectbox(key="quick_city").value is None
+    assert at.date_input(key="quick_date").value is None
+
+
+def test_quick_filters_fill_missing_ai_fields_and_survive_followup(monkeypatch):
+    full = asdict(demo_request("Плотная категория · 14 ноября"))
+    first = dict(full, city=None, date=None, event_format=None, budget=None)
+    replies = iter((first, dict(full, city=None, date=None)))
+    monkeypatch.setattr(AIService, "interpret", lambda self, *args: next(replies))
+    at = app()
+    at.date_input(key="quick_date").set_value(date(2026, 10, 10))
+    at.selectbox(key="quick_city").set_value("Астана")
+    at = submit_prompt(at, "Нужен ведущий")
+    assert not at.exception and at.session_state.request is None
+    assert at.session_state.intake_values["city"] == "Астана"
+    assert at.session_state.intake_values["date"] == date(2026, 10, 10)
+    assert at.selectbox(key="quick_city").value == "Астана"
+    assert at.date_input(key="quick_date").value == date(2026, 10, 10)
+    assert "формат" in at.info[0].value and "бюджет" in at.info[0].value
+    at = submit_prompt(at, "Корпоратив, до 1,5 млн тенге")
+    assert not at.exception
+    assert at.session_state.request.city == "Астана"
+    assert at.session_state.request.date == date(2026, 10, 10)
 
 
 def test_complete_prompt_runs_existing_matching_and_shows_editable_summary(monkeypatch):
@@ -108,11 +150,16 @@ def test_ai_outage_keeps_text_and_manual_path(monkeypatch):
         raise AIUnavailable("private provider detail")
 
     monkeypatch.setattr(AIService, "interpret", unavailable)
-    at = submit_prompt(app(), "Ищу флориста")
+    at = app()
+    at.date_input(key="quick_date").set_value(date(2026, 10, 10))
+    at.selectbox(key="quick_city").set_value("Алматы")
+    at = submit_prompt(at, "Ищу флориста")
     assert not at.exception and not at.error
     assert "ИИ сейчас недоступен" in at.warning[0].value
     assert any("Ищу флориста" in item.value for item in at.caption)
     assert "private provider detail" not in at.warning[0].value
+    assert at.selectbox(key="city").value == "Алматы"
+    assert at.date_input(key="date").value == date(2026, 10, 10)
     at.selectbox(key="category").set_value("Флорист")
     at.date_input(key="date").set_value(date(2026, 10, 10))
     at.number_input(key="budget").set_value(300000)
