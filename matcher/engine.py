@@ -57,8 +57,13 @@ def semantic_evidence(p, q, frequency=None):
     return best_evidence(p.description, q.preference, frequency)
 
 
-def score(p, q, frequency=None):
+def score(p, q, frequency=None, semantic_override=None):
     semantic, hits = semantic_evidence(p, q, frequency)
+    if q.preference and semantic_override is not None:
+        ai_semantic = Decimal(str(semantic_override))
+        if not ai_semantic.is_finite() or not 0 <= ai_semantic <= 1:
+            raise ValueError("Семантическая оценка должна быть от 0 до 1")
+        semantic = max(semantic, ai_semantic)
     active = {k: v for k, v in WEIGHTS.items() if not (k == "language" and not q.languages)
               and not (k == "duration" and q.hours is None) and not (k == "semantic" and not q.preference)}
     raw = {"format": Decimal(1), "language": Decimal(1), "budget": 1 - p.price / q.budget,
@@ -72,7 +77,7 @@ def score(p, q, frequency=None):
     return exact, breakdown, hits, matches
 
 
-def select(catalog, q):
+def select(catalog, q, semantic_scores=None):
     category = [p for p in catalog.profiles if key(q.category) in {key(c) for c in p.categories}]
     city = [p for p in category if key(p.city) == key(q.city)]
     rejected = {p.id: failures(p, q) for p in city}
@@ -88,8 +93,12 @@ def select(catalog, q):
     # Keep text weights stable when only the date, budget, or availability changes.
     frequency = document_frequency(city) if q.preference else None
     for p in remaining:
-        total, breakdown, hits, matches = score(p, q, frequency)
+        override = semantic_scores.get(p.id) if semantic_scores is not None else None
+        total, breakdown, hits, matches = score(p, q, frequency, override)
+        local_semantic = semantic_evidence(p, q, frequency)[0] if override is not None else None
+        ai_used = override is not None and q.preference and Decimal(str(override)) > local_semantic
         ranked.append({"profile": p, "score": float(total), "breakdown": breakdown, "evidence": hits,
+                       "semantic_source": "AI embeddings" if ai_used else "локальный поиск",
                        "sort_key": (-total, -matches, p.price, Decimal(len(p.busy_dates)) / DAYS, p.id)})
     ranked.sort(key=lambda c: c["sort_key"])
     return {"status": "no_category" if not city else "no_matches" if not ranked else "found",

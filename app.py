@@ -4,9 +4,10 @@ import json
 
 import streamlit as st
 
-from matcher.data import DATA, START, END, load_catalog
+from matcher.data import DATA, START, END, key, load_catalog
+from matcher.ai import AIService, AIUnavailable
 from matcher.demo import DEMOS, demo_request
-from matcher.engine import Request, select, REASONS, WEIGHTS
+from matcher.engine import Request, select, failures, REASONS, WEIGHTS
 from matcher.explain import (comparison_rows, comparison_summary, explain,
                              limitations, money, recommendation_facts)
 
@@ -16,6 +17,11 @@ st.set_page_config(page_title="Подбор · HackAlem", page_icon="◈", layou
 @st.cache_data
 def read_catalog(modified):
     return load_catalog()
+
+
+@st.cache_resource
+def ai_service():
+    return AIService()
 
 
 try:
@@ -72,6 +78,7 @@ with st.container(border=True):
         optional[1].number_input("Длительность, ч · 0 = не указана", min_value=0.0, step=0.5, key="hours")
     st.text_input("Что важно в подрядчике · необязательно", key="preference",
                   max_chars=240, placeholder="Например: спокойный стиль и опыт деловых мероприятий")
+    st.toggle("Уточнить рекомендации с ИИ", key="ai_enabled", help="Сравнить смысл описаний и проверить дословные фразы через OpenAI и NVIDIA.")
     submitted = st.button("Подобрать подрядчиков", type="primary")
     if submitted:
         try:
@@ -81,7 +88,7 @@ with st.container(border=True):
             st.session_state.pop("validation_error", None)
         except ValueError as exc:
             st.session_state.validation_error = str(exc)
-    st.caption("Календарь: 23.09–31.12.2026 · подбор и объяснения работают локально.")
+    st.caption("Календарь: 23.09–31.12.2026 · ИИ включается по желанию.")
 
 if catalog.issues:
     st.warning(f"Исключено повреждённых строк: {len(catalog.issues)}. Итоги относятся только к корректной части каталога.")
@@ -94,10 +101,44 @@ if "validation_error" in st.session_state:
 
 q = st.session_state.request
 r = select(catalog, q)
+ai_quotes = {}
+ai_status = ""
+ai_user_status = ""
+if st.session_state.ai_enabled:
+    service = ai_service()
+    if not service.available:
+        ai_status = "Ключи AI не найдены; показан локальный результат"
+        ai_user_status = "ИИ недоступен: ключи не найдены. Показан обычный подбор."
+    elif r["status"] == "found":
+        if q.preference:
+            eligible_profiles = [p for p in catalog.profiles if key(q.category) in
+                                 {key(category) for category in p.categories}
+                                 and key(p.city) == key(q.city) and not failures(p, q)]
+            ai_quotes, evidence_status = service.evidence([{"profile": p} for p in eligible_profiles], q)
+            grounded = [p for p in eligible_profiles if p.id in ai_quotes]
+            if grounded:
+                try:
+                    scores = service.semantic_scores(grounded, q.preference)
+                    r = select(catalog, q, scores)
+                    ai_status = "Embeddings OpenAI уточнили оценку профилей с подтверждённой фразой"
+                except AIUnavailable as exc:
+                    ai_status = f"Семантический API недоступен ({exc}); использован локальный поиск"
+            ai_status = f"{ai_status}. {evidence_status}" if ai_status else evidence_status
+            ai_user_status = ("ИИ уточнил подбор по пожеланию. Цитаты проверены по профилям." if ai_quotes
+                              else "ИИ не нашёл подтверждения пожеланию. Показан обычный подбор.")
+        else:
+            ai_status = "Укажите пожелание, чтобы ИИ сравнил смысл описаний"
+            ai_user_status = "Чтобы ИИ уточнил подбор, добавьте пожелание к подрядчику."
+        for candidate in r["candidates"]:
+            candidate["ai_quote"] = ai_quotes.get(candidate["profile"].id)
+    else:
+        ai_status = "AI не вызывается: подходящих кандидатов нет"
 st.subheader(f"{q.category} · {q.city} · {q.date:%d.%m.%Y}")
 st.caption(f"{q.event_format.capitalize()} · {money(q.budget)} · {', '.join(q.languages) or 'язык не задан'} · {f'{q.hours:g} ч' if q.hours else 'длительность не задана'}")
 if q.preference:
     st.caption(f"Пожелание: {q.preference}")
+if ai_user_status:
+    st.caption(ai_user_status)
 
 metrics = st.columns(4)
 metrics[0].metric("В городе", r["city_count"])
@@ -133,6 +174,8 @@ else:
             if provenance:
                 st.caption("Данные: " + " · ".join(provenance))
             st.write(explain(c, q))
+            if c.get("ai_quote"):
+                st.caption(f"ИИ-подтверждение из описания: «{c['ai_quote']}»")
             with st.expander("Почему рекомендован"):
                 for label, fact in recommendation_facts(c, q):
                     st.markdown(f"**{label}.** {fact}")
@@ -181,6 +224,8 @@ with st.expander("Подробности исключения"):
         st.caption("Нет исключённых профилей.")
 
 with st.expander("Что меняется на другой дате", expanded=False):
+    if st.session_state.ai_enabled and q.preference:
+        st.caption("Для сравнения второй даты с ИИ выберите её в форме; здесь показан обычный подбор.")
     other_date = st.date_input("Сравнить с датой", value=q.date + timedelta(days=1) if q.date < END else q.date - timedelta(days=1), min_value=START, max_value=END, format="DD.MM.YYYY")
     other = select(catalog, replace(q, date=other_date))
     st.write(f"На {q.date:%d.%m}: подходят {r['eligible']}, заняты {r['reasons']['busy']}. На {other_date:%d.%m}: подходят {other['eligible']}, заняты {other['reasons']['busy']}.")
@@ -211,7 +256,7 @@ with st.expander("Как принято решение · аудит подбо�
     st.write("Обязательные условия: категория → город → наличие календаря → дата → бюджет → формат → все выбранные языки → длительность. Отсутствие максимума часов не исключает профиль, но длительность считается неподтверждённой.")
     st.write("Базовые веса: формат 25, язык 20, бюджет 20, длительность 15, пожелание 20. Неуказанные язык, длительность и пожелание показаны как неучаствующие; остальные веса приводятся к шкале 100 для итоговой оценки. Указанный максимум часов даёт баллы только при подтверждённой длительности.")
     st.write("Бюджет: после обязательной проверки предпочтение получает меньшая цена «от». Это не оценка качества подрядчика и не гарантия итоговой цены.")
-    st.write("Пожелание: сравниваются слова запроса с фразами описаний; показывается исходная фраза с лучшим совпадением. Сходство слов не подтверждает смысл, который прямо не указан в профиле.")
+    st.write("Пожелание: в локальном режиме сравниваются слова с фразами описаний. При включённом ИИ используется сходство embeddings; дословные фразы от LLM показываются только после проверки с исходным профилем и AI-аудита.")
     st.write("При равных баллах: больше подтверждений → меньшая цена → меньшая доля занятых дней из 100 → идентификатор по алфавиту. Доступность не входит в балл; доля занятых дней используется только для устойчивого порядка при равенстве.")
     st.write("Отметки о синтетическом профиле, восстановленном городе или цене не повышают оценку и показываются в ограничениях карточки. Оценка — показатель соответствия запросу, а не вероятность успеха или рейтинг надёжности.")
     st.markdown("**Параметры этого подбора**")
@@ -227,7 +272,7 @@ with st.expander("Как принято решение · аудит подбо�
     ])
     payload = {"request": asdict(q), "status": r["status"], "funnel": r["funnel"], "reasons": r["reasons"],
                "rejected": r["rejected"], "eligible": r["eligible"], "data_issues": catalog.issues,
-               "candidates": [{"profile": asdict(c["profile"]), "score": c["score"], "breakdown": c["breakdown"], "evidence": c["evidence"], "explanation": explain(c, q), "recommendation_facts": recommendation_facts(c, q), "limitations": limitations(c["profile"])} for c in r["candidates"]]}
+               "ai_status": ai_status, "candidates": [{"profile": asdict(c["profile"]), "score": c["score"], "breakdown": c["breakdown"], "evidence": c["evidence"], "semantic_source": c["semantic_source"], "ai_quote": c.get("ai_quote"), "explanation": explain(c, q), "recommendation_facts": recommendation_facts(c, q), "limitations": limitations(c["profile"])} for c in r["candidates"]]}
     if len(r["candidates"]) >= 2:
         payload["top_comparison"] = {"summary": comparison_summary(*r["candidates"][:2]),
                                      "components": comparison_rows(*r["candidates"][:2], q)}

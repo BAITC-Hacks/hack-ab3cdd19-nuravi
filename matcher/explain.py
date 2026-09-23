@@ -65,6 +65,12 @@ def recommendation_facts(candidate, q):
     facts.append(("Длительность", duration))
     if not q.preference:
         relevance = "Пожелание в запросе не указано; описание не влияло на порядок."
+    elif candidate.get("semantic_source") == "AI embeddings":
+        quote = candidate.get("ai_quote")
+        relevance = (f"Сходство описания с пожеланием: {candidate['breakdown']['semantic']['value']:.2f} из 1. "
+                     + (f"Проверенная фраза профиля: «{quote}». " if quote else
+                        "Дословная фраза через AI-аудит не подтверждена. ")
+                     + _score_suffix(candidate, 'semantic'))
     elif matched:
         relevance = f"Часть слов пожелания найдена в описании: «{matched}». {_score_suffix(candidate, 'semantic')}"
     elif p.description:
@@ -133,12 +139,12 @@ def comparison_summary(first, second):
     a, b = first["profile"], second["profile"]
     difference = first["score"] - second["score"]
     if difference > 1e-9:
-        advantages = []
+        changes = []
         for factor in FACTOR_LABELS:
             delta = (_points(first, factor) or 0) - (_points(second, factor) or 0)
-            if delta > 1e-9:
-                advantages.append(f"{FACTOR_LABELS[factor]} +{delta:.1f}")
-        detail = ", ".join(advantages) or "сумма компонентов оценки"
+            if abs(delta) > 1e-9:
+                changes.append(f"{FACTOR_LABELS[factor]} {delta:+.1f}")
+        detail = ", ".join(changes) or "сумма компонентов оценки"
         return f"{a.id} выше {b.id} на {difference:.1f} балла: {detail}."
     first_matches, second_matches = -first["sort_key"][1], -second["sort_key"][1]
     if first_matches != second_matches:
