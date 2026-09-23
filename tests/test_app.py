@@ -31,7 +31,7 @@ def test_first_screen_is_prompt_first_without_demo_cards():
     assert not at.exception and not at.error and not at.warning
     assert at.date_input(key="quick_date").value is None
     assert at.selectbox(key="quick_city").value is None
-    assert any("Кого вы ищете?" in title.value for title in at.title)
+    assert any("Кого вы" in item.value and "ищете?" in item.value for item in at.markdown)
     assert at.button(key="submit_prompt").label == "Найти подрядчика"
     assert not at.success and not at.info
     assert not any(button.key.startswith("demo_") for button in at.button)
@@ -54,6 +54,19 @@ def test_quick_filters_override_prompt_facts_and_reset_with_new_request(monkeypa
     assert not at.exception
     assert at.selectbox(key="quick_city").value is None
     assert at.date_input(key="quick_date").value is None
+
+
+def test_quick_filter_labels_update_before_search():
+    at = app()
+    at.text_area(key="prompt_message").set_value("Нужен ведущий").run()
+    at.selectbox(key="quick_city").set_value("Астана").run()
+    labels = [item.proto.popover.label for item in at._tree if item.type == "popover"]
+    assert labels == ["Дата", "Астана"]
+    at.date_input(key="quick_date").set_value(date(2026, 11, 14)).run()
+    labels = [item.proto.popover.label for item in at._tree if item.type == "popover"]
+    assert labels == ["14.11.2026", "Астана"]
+    assert at.text_area(key="prompt_message").value == "Нужен ведущий"
+    assert at.session_state.request is None
 
 
 def test_quick_filters_fill_missing_ai_fields_and_survive_followup(monkeypatch):

@@ -70,12 +70,18 @@ def reset_search():
     st.session_state.intake_values = {}
     st.session_state.intake_error = ""
     st.session_state.last_prompt = ""
+    st.session_state.prompt_message = ""
     st.session_state.quick_city = None
     st.session_state.quick_date = None
     for field, value in {"city": "Алматы", "category": "Ведущий", "date": START,
                          "event_format": "корпоратив", "budget": 0, "languages": [],
                          "hours": 0.0, "preference": ""}.items():
         st.session_state[field] = value
+
+
+def queue_prompt():
+    st.session_state.submitted_message = st.session_state.prompt_message
+    st.session_state.prompt_message = ""
 
 
 def submit_manual():
@@ -161,21 +167,27 @@ def show_preliminary(values):
                     st.caption("В профиле есть восстановленные или синтетические данные — уточните их перед заказом.")
 
 
-with st.container(key="hero"):
-    st.markdown('<div class="hero-kicker"><span class="brand-mark" aria-hidden="true"></span>NURAVI AI</div>',
+with st.container(key="site_nav"):
+    st.markdown('<div class="site-brand"><span class="brand-mark" aria-hidden="true"></span>NURAVI AI</div>',
                 unsafe_allow_html=True)
-    st.title("Кого вы ищете?")
-    st.write("Опишите запрос — покажем варианты и уточним детали.")
 
-with st.container(key="prompt_search"):
-    with st.form("prompt_form", clear_on_submit=True):
-        message = st.text_area("Ваш запрос" if not st.session_state.intake_values else "Уточните текущий запрос",
-                               key="prompt_message", height=68, max_chars=1000, label_visibility="collapsed",
-                               placeholder="Например, нужен ведущий для корпоратива в Алматы 14 ноября…")
+landing_columns = st.container(key="landing_grid").columns([1.9, 1], gap="large", vertical_alignment="center")
+with landing_columns[0].container(key="landing_left"):
+    with st.container(key="hero"):
+        st.markdown('<div class="hero-kicker"><span class="hero-rule" aria-hidden="true"></span>ВАШ УМНЫЙ ПОМОЩНИК</div>',
+                    unsafe_allow_html=True)
+        st.markdown('<h1 class="hero-title">Кого вы<br><span class="hero-accent">ищете?</span></h1>',
+                    unsafe_allow_html=True)
+        st.write("Опишите событие своими словами. ИИ уточнит детали и предложит подходящих подрядчиков.")
+
+    with st.container(key="prompt_search"):
+        st.text_area("Ваш запрос" if not st.session_state.intake_values else "Уточните текущий запрос",
+                     key="prompt_message", height=104, max_chars=1000, label_visibility="collapsed",
+                     placeholder="Например, нужен ведущий для корпоратива в Алматы 14 ноября…")
         action_label = ("Ответить и продолжить" if st.session_state.intake_values and
                         missing(st.session_state.intake_values) else
                         "Уточнить подбор" if st.session_state.request else "Найти подрядчика")
-        composer_footer = st.columns([2.6, 1], gap="small", vertical_alignment="center")
+        composer_footer = st.columns([3, 1], gap="small", vertical_alignment="center")
         with composer_footer[0]:
             with st.container(horizontal=True, vertical_alignment="center", gap="small"):
                 selected_date = st.session_state.quick_date
@@ -190,9 +202,10 @@ with st.container(key="prompt_search"):
                                  placeholder="Выберите город", key="quick_city",
                                  help="Необязательно. Выбор здесь имеет приоритет над городом в тексте.")
         with composer_footer[1]:
-            prompt_submitted = st.form_submit_button(action_label, key="submit_prompt",
-                                                     type="primary", use_container_width=True)
+            prompt_submitted = st.button(action_label, key="submit_prompt", type="primary",
+                                         width="stretch", on_click=queue_prompt, help=action_label)
     if prompt_submitted:
+        message = st.session_state.pop("submitted_message", "")
         if not message.strip():
             st.warning("Опишите, кого ищете, или откройте ручной ввод ниже.")
         else:
@@ -231,6 +244,23 @@ with st.container(key="prompt_search"):
                 st.session_state.request = None
                 st.session_state.intake_error = ("ИИ не смог прочитать условия. "
                                                  "Заполните параметры вручную — ваш текст сохранён ниже.")
+
+with landing_columns[1].container(key="editorial_panel"):
+    st.image(Path(__file__).parent / "assets" / "botanical-panel.png", width="stretch")
+    st.markdown('<div class="editorial-copy">Хорошие<br>мероприятия<br>начинаются<br>с правильных<br>людей<span class="editorial-rule"></span></div>'
+                '<div class="editorial-signature">ЛЮДИ<br>СОБЫТИЯ<br>ВОЗМОЖНОСТИ</div>',
+                unsafe_allow_html=True)
+
+if st.session_state.request is None and not st.session_state.intake_values and not st.session_state.intake_error:
+    with st.container(key="benefits"):
+        for column, icon, title, detail in zip(st.columns(3, gap="large"),
+                                                ("search", "groups", "verified_user"),
+                                                ("Уточняющие вопросы", "Подходящие подрядчики", "Без лишних хлопот"),
+                                                ("ИИ задаст важные вопросы", "Только релевантные варианты", "Экономьте время и силы")):
+            with column:
+                st.markdown(f'<div class="benefit-item"><span class="benefit-icon material-symbols-rounded">{icon}</span>'
+                            f'<span><strong>{title}</strong><small>{detail}</small></span></div>',
+                            unsafe_allow_html=True)
 if st.session_state.intake_error or st.session_state.intake_values:
     with st.container(key="search_feedback"):
         if st.session_state.intake_error:
@@ -277,7 +307,7 @@ with manual_form:
         st.toggle("Уточнить рекомендации с ИИ", key="ai_enabled",
                   help="ИИ сравнивает описания с пожеланием. Условия события проверяются отдельно.")
         st.button("Подобрать по этим параметрам", key="submit_query", type="primary",
-                  use_container_width=True, on_click=submit_manual)
+                  width="stretch", on_click=submit_manual)
         st.caption("Доступные даты: 23.09–31.12.2026. Язык, длительность и пожелание можно не указывать.")
 
 if catalog.issues:
