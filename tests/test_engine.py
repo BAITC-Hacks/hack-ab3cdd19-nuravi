@@ -8,7 +8,9 @@ import pytest
 from matcher.data import Catalog, Profile, load_catalog, START, END
 from matcher.demo import DEMOS, demo_request
 from matcher.engine import Request, select, score, semantic_evidence
-from matcher.explain import explain, limitations
+from matcher.explain import (availability_fact, comparison_rows,
+                             comparison_summary, explain, limitations,
+                             recommendation_facts)
 
 
 @pytest.fixture
@@ -67,7 +69,12 @@ def test_unknown_availability_is_not_treated_as_free(p, q, empty_calendar):
     assert result["status"] == "no_matches"
     assert result["reasons"]["availability_unknown"] == 1
     assert result["rejected"] == {p.id: ("availability_unknown",)}
-    assert "данных о занятости нет" in " ".join(limitations(unknown))
+    assert "В профиле нет данных о занятых датах — доступность требует подтверждения." in limitations(unknown)
+    assert availability_fact(unknown, q.date) == "В профиле нет данных о занятых датах — доступность требует подтверждения."
+
+
+def test_confirmed_availability_uses_required_wording(p, q):
+    assert availability_fact(p, q.date) == "Дата отсутствует в списке занятых дат — подрядчик считается доступным."
 
 
 @pytest.mark.parametrize("count", [1, 2, 3, 5])
@@ -186,6 +193,28 @@ def test_real_data_deterministic_and_shuffle_invariant():
     # Even removing ids and names, the actual factual texts must differ.
     stripped = [text.replace(c["profile"].id, "").replace(c["profile"].name, "") for c, text in zip(expected, explanations)]
     assert len(set(stripped)) == 3
+
+
+def test_three_cards_have_complete_distinct_recommendation_facts():
+    q = demo_request(next(iter(DEMOS)))
+    candidates = select(load_catalog(), q)["candidates"]
+    explanations = [recommendation_facts(candidate, q) for candidate in candidates]
+    expected_labels = ["Категория", "Город", "Доступность", "Формат", "Язык", "Бюджет", "Длительность", "Релевантность описания"]
+    assert len(explanations) == 3
+    assert all([label for label, _ in facts] == expected_labels for facts in explanations)
+    assert len({tuple(facts) for facts in explanations}) == 3
+    assert all("Дата отсутствует в списке занятых дат — подрядчик считается доступным." in dict(facts)["Доступность"] for facts in explanations)
+
+
+def test_top_comparison_uses_real_score_components():
+    q = demo_request(next(iter(DEMOS)))
+    first, second = select(load_catalog(), q)["candidates"][:2]
+    rows = comparison_rows(first, second, q)
+    assert [row["Фактор"] for row in rows] == ["Формат", "Язык", "Бюджет", "Длительность", "Смысловая релевантность"]
+    for factor, row in zip(("format", "language", "budget", "duration", "semantic"), rows):
+        assert f"{first['breakdown'][factor]['points']:.1f}/{first['breakdown'][factor]['weight']}" in row[first["profile"].id]
+        assert f"{second['breakdown'][factor]['points']:.1f}/{second['breakdown'][factor]['weight']}" in row[second["profile"].id]
+    assert comparison_summary(first, second) == "HK-44733 выше HK-27222 на 10.0 балла: Релевантность описания +10.0."
 
 
 def test_real_demo_date_change_is_due_to_calendar():

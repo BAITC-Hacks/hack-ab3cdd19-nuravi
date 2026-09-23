@@ -4,10 +4,11 @@ import json
 
 import streamlit as st
 
-from matcher.data import DATA, START, END, FIELDS, load_catalog
+from matcher.data import DATA, START, END, load_catalog
 from matcher.demo import DEMOS, demo_request
 from matcher.engine import Request, select, REASONS
-from matcher.explain import explain, limitations, money
+from matcher.explain import (comparison_rows, comparison_summary, explain,
+                             limitations, money, recommendation_facts)
 
 st.set_page_config(page_title="Подбор · HackAlem", page_icon="◈", layout="wide")
 
@@ -42,17 +43,32 @@ if "request" not in st.session_state:
     st.session_state.demo = next(iter(DEMOS))
     fill_demo()
 
-with st.sidebar:
-    st.markdown("### Параметры мероприятия")
-    st.selectbox("Демо-сценарий", list(DEMOS), key="demo", on_change=fill_demo)
-    st.selectbox("Город", sorted({p.city for p in catalog.profiles}), key="city")
-    st.selectbox("Категория подрядчика", sorted({c for p in catalog.profiles for c in p.categories}), key="category")
-    st.date_input("Дата мероприятия", min_value=START, max_value=END, format="DD.MM.YYYY", key="date")
-    st.selectbox("Тип мероприятия", sorted({f for p in catalog.profiles for f in p.formats}), key="event_format")
-    st.number_input("Бюджет, ₸", min_value=0, step=50000, key="budget")
-    st.multiselect("Языки · необязательно", sorted({l for p in catalog.profiles for l in p.languages}), key="languages", help="Подрядчик должен поддерживать все выбранные языки.")
-    st.number_input("Длительность, ч · 0 = не указана", min_value=0.0, step=0.5, key="hours")
-    submitted = st.button("Подобрать подрядчиков", type="primary", width="stretch")
+demo_labels = {
+    "Плотная категория · 14 ноября": "Плотная категория",
+    "Та же заявка · 15 ноября": "Другая дата",
+    "Редкая категория · флорист": "Редкая категория",
+    "Никто не проходит · бюджет": "Нет результата",
+    "Категории нет · зарубежье": "Нет категории в городе",
+}
+
+st.caption("HACKALEM / УМНЫЙ ПОДБОР ПОДРЯДЧИКОВ")
+st.title("Подбор подрядчиков")
+st.caption("До трёх вариантов из каталога с проверяемыми причинами выбора.")
+
+with st.container(border=True):
+    st.segmented_control("Быстрые примеры", list(DEMOS), key="demo", format_func=demo_labels.get,
+                         on_change=fill_demo, width="stretch")
+    row = st.columns([1, 1.35, 1, 1, 1.15])
+    row[0].selectbox("Город", sorted({p.city for p in catalog.profiles}), key="city")
+    row[1].selectbox("Категория", sorted({c for p in catalog.profiles for c in p.categories}), key="category")
+    row[2].date_input("Дата", min_value=START, max_value=END, format="DD.MM.YYYY", key="date")
+    row[3].selectbox("Формат", sorted({f for p in catalog.profiles for f in p.formats}), key="event_format")
+    row[4].number_input("Бюджет, ₸", min_value=0, step=50000, key="budget")
+    with st.expander("Дополнительные параметры · язык и длительность"):
+        optional = st.columns(2)
+        optional[0].multiselect("Языки", sorted({l for p in catalog.profiles for l in p.languages}), key="languages", help="Подрядчик должен поддерживать все выбранные языки.")
+        optional[1].number_input("Длительность, ч · 0 = не указана", min_value=0.0, step=0.5, key="hours")
+    submitted = st.button("Подобрать подрядчиков", type="primary")
     if submitted:
         try:
             st.session_state.request = Request(
@@ -61,13 +77,8 @@ with st.sidebar:
             st.session_state.pop("validation_error", None)
         except ValueError as exc:
             st.session_state.validation_error = str(exc)
-    st.caption("Календарь: 23.09–31.12.2026. Даты вне этого окна не поддерживаются.")
-    st.caption("Объяснения работают локально, без API и отправки данных.")
+    st.caption("Календарь: 23.09–31.12.2026 · подбор и объяснения работают локально.")
 
-st.caption("HACKALEM / УМНЫЙ ПОДБОР ПОДРЯДЧИКОВ")
-st.title("Подрядчики. С понятными причинами.")
-st.write("До трёх вариантов из каталога — с фактами, ограничениями и проверяемым решением.")
-st.caption(f"{len(catalog.profiles)} профилей · {sum(p.synthetic for p in catalog.profiles)} синтетических · имена вымышленные")
 if catalog.issues:
     st.warning(f"Исключено повреждённых строк: {len(catalog.issues)}. Итоги относятся только к корректной части каталога.")
     with st.expander("Ошибки исходных данных"):
@@ -80,13 +91,13 @@ if "validation_error" in st.session_state:
 q = st.session_state.request
 r = select(catalog, q)
 st.subheader(f"{q.category} · {q.city} · {q.date:%d.%m.%Y}")
-st.caption(f"{q.event_format.capitalize()} · бюджет {money(q.budget)} · языки: {', '.join(q.languages) or 'не заданы'} · длительность: {str(q.hours) + ' ч' if q.hours else 'не задана'}")
-st.caption("Результаты относятся к параметрам выше. После изменения формы нажмите «Подобрать подрядчиков».")
+st.caption(f"{q.event_format.capitalize()} · {money(q.budget)} · {', '.join(q.languages) or 'язык не задан'} · {f'{q.hours:g} ч' if q.hours else 'длительность не задана'}")
 
-metrics = st.columns(3)
-metrics[0].metric("В категории и городе", r["city_count"])
-metrics[1].metric("Прошли все условия", r["eligible"])
-metrics[2].metric("Показано вариантов", len(r["candidates"]))
+metrics = st.columns(4)
+metrics[0].metric("В городе", r["city_count"])
+metrics[1].metric("Подходят", r["eligible"])
+metrics[2].metric("Показано", len(r["candidates"]))
+metrics[3].metric("Исключено", len(r["rejected"]))
 
 if r["status"] == "no_category":
     st.warning(f"В городе «{q.city}» нет подрядчиков категории «{q.category}» в доступном каталоге.")
@@ -96,50 +107,60 @@ elif r["status"] == "no_matches":
     st.write("Причины и количество исключённых профилей приведены ниже. Попробуйте другую дату или скорректируйте ограничения.")
 else:
     if r["eligible"] < 3:
-        st.info(f"Найдено только {r['eligible']} из 3 вариантов: в категории и городе {r['city_count']} профилей, исключено {len(r['rejected'])}. Причины — ниже.")
+        st.info(f"Найдено {r['eligible']} из 3 вариантов. Остальные профили не прошли условия — причины ниже.")
     else:
         st.success(f"Подобраны 3 варианта из {r['eligible']} подходящих.")
-    for i, c in enumerate(r["candidates"], 1):
+    cards = st.columns(len(r["candidates"]))
+    for i, (column, c) in enumerate(zip(cards, r["candidates"]), 1):
         p = c["profile"]
-        with st.container(border=True):
-            left, right = st.columns([3, 1])
-            left.subheader(f"{i:02d} / {p.name}")
-            left.caption(f"{p.id} · {' / '.join(p.categories)} · {p.city}")
-            right.metric("Оценка соответствия", f"{c['score']:.1f} / 100")
-            st.markdown(f"**От {money(p.price)}** · {q.date:%d.%m.%Y}: свободен по календарю датасета")
+        with column.container(border=True):
+            st.markdown(f"### {i}. {p.name}")
+            st.caption(f"{p.id} · {' / '.join(p.categories)} · {p.city}")
+            st.metric("Соответствие", f"{c['score']:.1f} / 100")
+            st.markdown(f"**От {money(p.price)}**")
+            st.caption("✓ Доступен на дату · ✓ Формат подходит")
             st.write(explain(c, q))
-            for note in limitations(p):
-                st.caption(note)
-            with st.expander(f"Проверить факты и баллы · {p.id}"):
-                labels = {"format": "Формат", "language": "Язык", "budget": "Близость цены к бюджету", "duration": "Длительность", "semantic": "Совпадения в описании"}
-                st.table([{"Фактор": labels[k], "Вес": v["weight"], "Подтверждение (0–1)": round(v["value"], 3), "Вклад в итог": round(v["points"], 2)} for k, v in c["breakdown"].items()])
-                st.write("Словарные совпадения в description:", c["evidence"] or "Не найдены")
-                st.text(p.description or "Описание отсутствует")
-                st.json({"id": p.id, "event_formats": p.formats, "languages": p.languages,
-                         "max_hours": str(p.max_hours) if p.max_hours is not None else None,
-                         "busy_dates": sorted(d.isoformat() for d in p.busy_dates) if p.busy_dates else None,
-                         "synthetic": p.synthetic, "city_imputed": p.city_imputed, "price_imputed": p.price_imputed})
+            with st.expander("Почему рекомендован"):
+                for label, fact in recommendation_facts(c, q):
+                    st.markdown(f"**{label}.** {fact}")
+                st.markdown("**Состав оценки**")
+                labels = {"format": "Формат", "language": "Язык", "budget": "Бюджет", "duration": "Длительность", "semantic": "Описание"}
+                for key, value in c["breakdown"].items():
+                    st.caption(f"{labels[key]}: {value['points']:.1f} из {value['weight']} баллов · подтверждено {value['value']:.0%}")
+                notes = limitations(p)
+                if notes:
+                    st.markdown("**Ограничения**")
+                    for note in notes:
+                        st.caption(note)
+
+    if len(r["candidates"]) >= 2:
+        first, second = r["candidates"][:2]
+        st.subheader("Почему первый кандидат выше второго")
+        st.write(comparison_summary(first, second))
+        with st.expander("Показать сравнение всех компонентов"):
+            st.table(comparison_rows(first, second, q))
+            st.caption("Использованы те же компоненты и баллы, что и в итоговой оценке; категория, город и доступность уже проверены обязательными условиями.")
 
 st.subheader("Почему другие не попали")
-col1, col2 = st.columns(2)
-with col1:
-    st.caption("Последовательная воронка: каждый шаг применяется к предыдущему")
-    st.table([{"Этап": stage, "Профилей осталось": count} for stage, count in r["funnel"]])
-with col2:
-    st.caption("Все причины среди профилей выбранной категории и города")
-    st.table([{"Причина": label, "Профилей": r["reasons"][code]} for code, label in REASONS.items()])
-    st.caption("У профиля может быть несколько причин; сумма причин может превышать число исключённых профилей.")
-    st.write(f"Другой город: {r['category_count'] - r['city_count']}. Прошли условия, но ниже топ-3: {r['not_shown']}.")
-
-with st.expander("Какие именно профили исключены"):
+reason_parts = [f"{label.lower()} — {r['reasons'][code]}" for code, label in REASONS.items() if r["reasons"][code]]
+st.write(" · ".join(reason_parts) if reason_parts else "Дополнительных исключений по условиям нет.")
+st.caption(f"Другой город: {r['category_count'] - r['city_count']} · прошли условия, но ниже топ-3: {r['not_shown']}.")
+with st.expander("Подробности исключения"):
+    col1, col2 = st.columns(2)
+    with col1:
+        st.caption("Последовательная воронка")
+        st.table([{"Этап": stage, "Осталось": count} for stage, count in r["funnel"]])
+    with col2:
+        st.caption("Все причины")
+        st.table([{"Причина": label, "Профилей": r["reasons"][code]} for code, label in REASONS.items()])
+        st.caption("У профиля может быть несколько причин, поэтому сумма может быть больше числа исключённых.")
     names = {p.id: p.name for p in catalog.profiles}
     if r["rejected"]:
-        st.table([
-            {"ID": pid, "Имя": names[pid], "Причины": "; ".join(REASONS[x] for x in reasons)}
-            for pid, reasons in sorted(r["rejected"].items())
-        ])
+        st.markdown("**Исключённые профили**")
+        st.table([{"ID": pid, "Имя": names[pid], "Причины": "; ".join(REASONS[x] for x in reasons)}
+                  for pid, reasons in sorted(r["rejected"].items())])
     else:
-        st.write("Нет исключений по дополнительным условиям.")
+        st.caption("Нет исключённых профилей.")
 
 with st.expander("Что меняется на другой дате", expanded=False):
     other_date = st.date_input("Сравнить с датой", value=q.date + timedelta(days=1) if q.date < END else q.date - timedelta(days=1), min_value=START, max_value=END, format="DD.MM.YYYY")
@@ -156,17 +177,28 @@ with st.expander("Что меняется на другой дате", expanded=
         st.caption("Занятость этой категории не изменилась; выдача может остаться той же.")
 
 with st.expander("Как принято решение · аудит подбора"):
-    st.write("Жёсткие фильтры: категория → город → известный календарь → дата → бюджет → формат → все выбранные языки → длительность. Пустой busy_dates не считается подтверждённой доступностью; max_hours=null не исключает профиль.")
-    st.write("Веса: формат 25%, язык 20%, бюджет 20%, длительность 15%, текст 20%. Неуказанные язык и длительность исключаются из знаменателя; оставшиеся веса нормируются к 100. При указанной длительности max_hours=null даёт 0 баллов за этот фактор.")
+    st.write("Обязательные условия: категория → город → наличие календаря → дата → бюджет → формат → все выбранные языки → длительность. Отсутствие максимума часов не исключает профиль, но длительность считается неподтверждённой.")
+    st.write("Веса: формат 25%, язык 20%, бюджет 20%, длительность 15%, описание 20%. Неуказанные язык и длительность не влияют на оценку; оставшиеся веса приводятся к шкале 100. Если максимум часов не указан, фактор длительности даёт 0 баллов.")
     st.write("Бюджет: цена / бюджет. Среди допустимых цен выше балл у цены ближе к бюджету; это не оценка качества и не рекомендация потратить больше.")
-    st.write("Текст: доля подтверждённых групп «формат» и выбранных языков по явным словам в description. Стиль, масштаб, аудитория и опыт без соответствующих параметров запроса не дают бонусов. Рекламные заявления не считаются рейтингом.")
-    st.write("При равных баллах: больше подтверждений → меньшая цена → меньшая доля занятых дней из 100 → id по алфавиту. Доступность не входит в балл; доля занятых дней используется только как поздний tie-breaker.")
-    st.write("Поля CSV:", ", ".join(sorted(FIELDS)))
-    st.write("Флаги synthetic, city_imputed, price_imputed не повышают баллы и показаны в ограничениях каждой карточки. Оценка — эвристика соответствия, не вероятность успеха и не рейтинг надёжности.")
-    st.json(asdict(q), expanded=False)
+    st.write("Описание: учитывается доля явных совпадений с форматом и выбранными языками. Стиль, масштаб, аудитория и опыт без соответствующих параметров запроса не дают бонусов. Рекламные заявления не считаются рейтингом.")
+    st.write("При равных баллах: больше подтверждений → меньшая цена → меньшая доля занятых дней из 100 → идентификатор по алфавиту. Доступность не входит в балл; доля занятых дней используется только для устойчивого порядка при равенстве.")
+    st.write("Отметки о синтетическом профиле, восстановленном городе или цене не повышают оценку и показываются в ограничениях карточки. Оценка — показатель соответствия запросу, а не вероятность успеха или рейтинг надёжности.")
+    st.markdown("**Параметры этого подбора**")
+    st.table([
+        {"Параметр": "Город", "Значение": q.city},
+        {"Параметр": "Категория", "Значение": q.category},
+        {"Параметр": "Дата", "Значение": f"{q.date:%d.%m.%Y}"},
+        {"Параметр": "Формат", "Значение": q.event_format},
+        {"Параметр": "Бюджет", "Значение": money(q.budget)},
+        {"Параметр": "Языки", "Значение": ", ".join(q.languages) or "не указаны"},
+        {"Параметр": "Длительность", "Значение": f"{q.hours:g} ч" if q.hours is not None else "не указана"},
+    ])
     payload = {"request": asdict(q), "status": r["status"], "funnel": r["funnel"], "reasons": r["reasons"],
                "rejected": r["rejected"], "eligible": r["eligible"], "data_issues": catalog.issues,
-               "candidates": [{"profile": asdict(c["profile"]), "score": c["score"], "breakdown": c["breakdown"], "evidence": c["evidence"], "explanation": explain(c, q), "limitations": limitations(c["profile"])} for c in r["candidates"]]}
+               "candidates": [{"profile": asdict(c["profile"]), "score": c["score"], "breakdown": c["breakdown"], "evidence": c["evidence"], "explanation": explain(c, q), "recommendation_facts": recommendation_facts(c, q), "limitations": limitations(c["profile"])} for c in r["candidates"]]}
+    if len(r["candidates"]) >= 2:
+        payload["top_comparison"] = {"summary": comparison_summary(*r["candidates"][:2]),
+                                     "components": comparison_rows(*r["candidates"][:2], q)}
     def serialize(value):
         if isinstance(value, (set, frozenset)):
             return sorted(str(x) for x in value)
