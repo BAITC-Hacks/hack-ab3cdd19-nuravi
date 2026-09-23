@@ -179,6 +179,28 @@ def test_preference_changes_order_with_grounded_evidence(p, q):
     assert result["candidates"][1]["breakdown"]["semantic"]["points"] == 0
 
 
+def test_language_count_preference_uses_profile_languages(p, q):
+    q = replace(q, preference="знание 3 языков")
+    bilingual = replace(p, id="TWO", languages=("русский", "казахский"))
+    trilingual = replace(p, id="THREE", languages=("русский", "казахский", "английский"),
+                        description="Описание не перечисляет языки.")
+    result = select(catalog(bilingual, trilingual), q)
+    first, second = result["candidates"]
+    assert first["profile"].id == "THREE"
+    assert first["breakdown"]["semantic"]["base_points"] == 20
+    assert second["breakdown"]["semantic"]["base_points"] == 0
+    facts = dict(recommendation_facts(first, q))
+    assert "английский" in facts["Релевантность описания"]
+    assert "Пожелание подтверждено данными профиля" in explain(first, q)
+
+
+@pytest.mark.parametrize("preference", ["знание трех языков", "работает с тремя языками"])
+def test_language_count_preference_understands_words(p, q, preference):
+    q = replace(q, preference=preference)
+    trilingual = replace(p, languages=("русский", "казахский", "английский"))
+    assert select(catalog(trilingual), q)["candidates"][0]["breakdown"]["semantic"]["base_points"] == 20
+
+
 def test_negative_preference_needs_negative_source_phrase(p, q):
     q = replace(q, preference="без конкурсов")
     with_contests = replace(p, id="CONTESTS", price=Decimal(100000),

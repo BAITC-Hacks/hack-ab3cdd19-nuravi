@@ -7,7 +7,8 @@ import streamlit as st
 from matcher.data import DATA, START, END, key, load_catalog
 from matcher.ai import AIService, AIUnavailable
 from matcher.demo import DEMOS, demo_request
-from matcher.engine import Request, select, failures, REASONS, WEIGHTS
+from matcher.engine import (Request, select, failures, language_count_preference,
+                            REASONS, WEIGHTS)
 from matcher.explain import (comparison_rows, comparison_summary, explain,
                              limitations, money, recommendation_facts)
 
@@ -114,18 +115,23 @@ if st.session_state.ai_enabled:
             eligible_profiles = [p for p in catalog.profiles if key(q.category) in
                                  {key(category) for category in p.categories}
                                  and key(p.city) == key(q.city) and not failures(p, q)]
-            ai_quotes, evidence_status = service.evidence([{"profile": p} for p in eligible_profiles], q)
-            grounded = [p for p in eligible_profiles if p.id in ai_quotes]
-            if grounded:
-                try:
-                    scores = service.semantic_scores(grounded, q.preference)
-                    r = select(catalog, q, scores)
-                    ai_status = "Embeddings OpenAI уточнили оценку профилей с подтверждённой фразой"
-                except AIUnavailable as exc:
-                    ai_status = f"Семантический API недоступен ({exc}); использован локальный поиск"
-            ai_status = f"{ai_status}. {evidence_status}" if ai_status else evidence_status
-            ai_user_status = ("ИИ уточнил подбор по пожеланию. Цитаты проверены по профилям." if ai_quotes
-                              else "ИИ не нашёл подтверждения пожеланию. Показан обычный подбор.")
+            requested_languages = language_count_preference(q.preference)
+            if requested_languages is not None:
+                ai_status = f"Пожелание проверено по спискам языков профилей: требуется не менее {requested_languages}"
+                ai_user_status = "Пожелание проверено по фактическому списку языков каждого профиля."
+            else:
+                ai_quotes, evidence_status = service.evidence([{"profile": p} for p in eligible_profiles], q)
+                grounded = [p for p in eligible_profiles if p.id in ai_quotes]
+                if grounded:
+                    try:
+                        scores = service.semantic_scores(grounded, q.preference)
+                        r = select(catalog, q, scores)
+                        ai_status = "Embeddings OpenAI уточнили оценку профилей с подтверждённой фразой"
+                    except AIUnavailable as exc:
+                        ai_status = f"Семантический API недоступен ({exc}); использован локальный поиск"
+                ai_status = f"{ai_status}. {evidence_status}" if ai_status else evidence_status
+                ai_user_status = ("ИИ уточнил подбор по пожеланию. Цитаты проверены по профилям." if ai_quotes
+                                  else "ИИ не нашёл подтверждения пожеланию. Показан обычный подбор.")
         else:
             ai_status = "Укажите пожелание, чтобы ИИ сравнил смысл описаний"
             ai_user_status = "Чтобы ИИ уточнил подбор, добавьте пожелание к подрядчику."

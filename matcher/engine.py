@@ -2,6 +2,7 @@ from collections import Counter
 from dataclasses import dataclass
 from datetime import date
 from decimal import Decimal
+import re
 
 from .data import START, END, DAYS, clean, key, number
 from .text import best_evidence, document_frequency
@@ -53,13 +54,34 @@ def failures(p, q):
     ) if fail)
 
 
+def language_count_preference(value):
+    """Return an explicit requested number of languages, if present."""
+    normalized = key(value)
+    match = re.search(r"\b(\d+)\s*(?:язык\w*|языков)\b", normalized)
+    if match:
+        return int(match.group(1))
+    words = {"двух": 2, "двумя": 2, "трех": 3, "тремя": 3, "четырех": 4,
+             "четырьмя": 4, "пяти": 5}
+    for word, count in words.items():
+        if re.search(rf"\b{word}\s+язык\w*\b", normalized):
+            return count
+    return None
+
+
 def semantic_evidence(p, q, frequency=None):
+    requested_count = language_count_preference(q.preference)
+    if requested_count is not None:
+        if len(p.languages) < requested_count:
+            return Decimal(0), []
+        fact = f"Профиль поддерживает {len(p.languages)} языка: {', '.join(p.languages)}"
+        return Decimal(1), [{"factor": "Пожелание", "match": fact,
+                             "terms": [str(requested_count)], "field": "languages"}]
     return best_evidence(p.description, q.preference, frequency)
 
 
 def score(p, q, frequency=None, semantic_override=None):
     semantic, hits = semantic_evidence(p, q, frequency)
-    if q.preference and semantic_override is not None:
+    if q.preference and semantic_override is not None and language_count_preference(q.preference) is None:
         ai_semantic = Decimal(str(semantic_override))
         if not ai_semantic.is_finite() or not 0 <= ai_semantic <= 1:
             raise ValueError("Семантическая оценка должна быть от 0 до 1")
@@ -96,7 +118,8 @@ def select(catalog, q, semantic_scores=None):
         override = semantic_scores.get(p.id) if semantic_scores is not None else None
         total, breakdown, hits, matches = score(p, q, frequency, override)
         local_semantic = semantic_evidence(p, q, frequency)[0] if override is not None else None
-        ai_used = override is not None and q.preference and Decimal(str(override)) > local_semantic
+        ai_used = (override is not None and q.preference and language_count_preference(q.preference) is None
+                   and Decimal(str(override)) > local_semantic)
         ranked.append({"profile": p, "score": float(total), "breakdown": breakdown, "evidence": hits,
                        "semantic_source": "AI embeddings" if ai_used else "локальный поиск",
                        "sort_key": (-total, -matches, p.price, Decimal(len(p.busy_dates)) / DAYS, p.id)})

@@ -71,6 +71,8 @@ def recommendation_facts(candidate, q):
                      + (f"Проверенная фраза профиля: «{quote}». " if quote else
                         "Дословная фраза через AI-аудит не подтверждена. ")
                      + _score_suffix(candidate, 'semantic'))
+    elif matched and candidate["evidence"][0].get("field") == "languages":
+        relevance = f"Пожелание подтверждено языками профиля: {matched}. {_score_suffix(candidate, 'semantic')}"
     elif matched:
         relevance = f"Часть слов пожелания найдена в описании: «{matched}». {_score_suffix(candidate, 'semantic')}"
     elif p.description:
@@ -84,7 +86,10 @@ def recommendation_facts(candidate, q):
 def explain(candidate, q):
     p = candidate["profile"]
     hit = candidate["evidence"]
-    if hit:
+    if hit and hit[0].get("field") == "languages":
+        excerpt = ""
+        reason = f"Пожелание подтверждено данными профиля: {hit[0]['match']}"
+    elif hit:
         excerpt = hit[0]["match"]
     else:
         _, format_hit = best_evidence(p.description, q.event_format)
@@ -101,7 +106,8 @@ def explain(candidate, q):
         shortened = excerpt[start:start + 210].rsplit(" ", 1)[0]
         excerpt = ("…" if start else "") + shortened + ("…" if start + 210 < len(excerpt) else "")
     excerpt = excerpt.rstrip(" .!?")
-    reason = f"В описании {p.id}: «{excerpt}»" if excerpt else "Описание профиля отсутствует"
+    if not (hit and hit[0].get("field") == "languages"):
+        reason = f"В описании {p.id}: «{excerpt}»" if excerpt else "Описание профиля отсутствует"
     if q.preference and not hit:
         reason += "; подтверждения пожеланию не найдено"
     return (f"На {q.date:%d.%m.%Y} доступен по календарю; формат «{q.event_format}» подходит, цена от {money(p.price)} укладывается в бюджет. "
