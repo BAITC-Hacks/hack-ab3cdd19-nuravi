@@ -5,6 +5,7 @@ from .engine import Request
 DEMOS = {
     "Плотная категория · 14 ноября": dict(city="Алматы", date=date(2026, 11, 14), event_format="корпоратив", category="Ведущий", budget=1500000, hours=6, languages=("русский",)),
     "Та же заявка · 15 ноября": dict(city="Алматы", date=date(2026, 11, 15), event_format="корпоратив", category="Ведущий", budget=1500000, hours=6, languages=("русский",)),
+    "Пожелание · деловой форум": dict(city="Алматы", date=date(2026, 11, 15), event_format="корпоратив", category="Ведущий", budget=1500000, hours=6, languages=("русский",), preference="деловой форум"),
     "Редкая категория · флорист": dict(city="Алматы", date=date(2026, 10, 10), event_format="корпоратив", category="Флорист", budget=300000, hours=6, languages=("русский",)),
     "Никто не проходит · бюджет": dict(city="Алматы", date=date(2026, 11, 14), event_format="корпоратив", category="Ведущий", budget=10000, hours=6, languages=("русский",)),
     "Категории нет · зарубежье": dict(city="Зарубежье", date=date(2026, 11, 14), event_format="корпоратив", category="Флорист", budget=300000, hours=None, languages=()),

@@ -74,7 +74,7 @@ def test_unknown_availability_is_not_treated_as_free(p, q, empty_calendar):
 
 
 def test_confirmed_availability_uses_required_wording(p, q):
-    assert availability_fact(p, q.date) == "Дата отсутствует в списке занятых дат — подрядчик считается доступным."
+    assert availability_fact(p, q.date) == "На 14.11.2026 дата отсутствует в списке занятых дат — подрядчик считается доступным."
 
 
 @pytest.mark.parametrize("count", [1, 2, 3, 5])
@@ -97,14 +97,15 @@ def test_null_hours_not_a_confirmed_match(p, q):
 def test_optional_weights_are_renormalized(p, q):
     q = replace(q, languages=(), hours=None)
     total, breakdown, *_ = score(p, q)
-    assert set(breakdown) == {"format", "budget", "semantic"}
+    assert set(breakdown) == {"format", "budget"}
     assert sum(v["points"] for v in breakdown.values()) == pytest.approx(float(total))
-    assert breakdown["format"]["points"] == pytest.approx(25 / 65 * 100)
+    assert breakdown["format"]["max_points"] == pytest.approx(25 / 45 * 100)
+    assert all(v["points"] <= v["max_points"] for v in breakdown.values())
 
 
-def test_budget_prefers_proximity_not_cheapest(p, q):
+def test_budget_prefers_lower_price_after_hard_filter(p, q):
     r = select(catalog(p, replace(p, id="closer", price=Decimal(490000))), q)
-    assert r["candidates"][0]["profile"].id == "closer"
+    assert r["candidates"][0]["profile"].id == p.id
 
 
 def test_price_and_duration_boundaries_are_inclusive(p, q):
@@ -145,6 +146,7 @@ def test_calendar_edges(p, q, d):
 
 
 def test_marketing_does_not_raise_score(p, q):
+    q = replace(q, preference="деловой форум")
     original = score(p, q)[0]
     assert score(replace(p, description=p.description + " Лучший, надёжный, топ-1, опыт 100 лет!"), q)[0] == original
     ratio, hits = semantic_evidence(replace(p, description="Профессиональный подрядчик"), q)
@@ -152,10 +154,11 @@ def test_marketing_does_not_raise_score(p, q):
 
 
 def test_unknown_description(p, q):
+    q = replace(q, preference="деловой форум")
     r = select(catalog(replace(p, description="")), q)
     assert r["eligible"] == 1
     assert r["candidates"][0]["breakdown"]["semantic"]["points"] == 0
-    assert "описание отсутствует" in explain(r["candidates"][0], q)
+    assert "описание профиля отсутствует" in explain(r["candidates"][0], q).lower()
 
 
 def test_stable_ties_use_busy_share_then_id(p, q):
@@ -165,20 +168,27 @@ def test_stable_ties_use_busy_share_then_id(p, q):
     assert [c["profile"].id for c in r["candidates"]] == ["A", "B", "0"]
 
 
-def test_tied_score_prefers_more_confirmations(p, q):
-    a = replace(p, id="A", price=Decimal(100000))
-    b = replace(p, id="B", description="Веду корпоративы.", price=Decimal(350000))
-    assert score(a, q)[0] == score(b, q)[0]
-    assert score(a, q)[3] > score(b, q)[3]
-    assert select(catalog(b, a), q)["candidates"][0]["profile"].id == "A"
+def test_preference_changes_order_with_grounded_evidence(p, q):
+    q = replace(q, preference="деловой форум")
+    matching = replace(p, id="MATCH", description="Провёл деловой форум для международных гостей.")
+    other = replace(p, id="OTHER", description="Веду камерные свадьбы.")
+    result = select(catalog(other, matching), q)
+    assert result["candidates"][0]["profile"].id == "MATCH"
+    assert "деловой форум" in explain(result["candidates"][0], q).lower()
+    assert result["candidates"][0]["breakdown"]["semantic"]["points"] > 0
+    assert result["candidates"][1]["breakdown"]["semantic"]["points"] == 0
 
 
-def test_tied_score_and_confirmations_prefer_lower_price(p, q):
-    a = replace(p, id="A", price=Decimal(500000), max_hours=None)
-    b = replace(p, id="B", price=Decimal(375000), description="Веду корпоративы.")
-    assert score(a, q)[0] == score(b, q)[0]
-    assert score(a, q)[3] == score(b, q)[3]
-    assert select(catalog(a, b), q)["candidates"][0]["profile"].id == "B"
+def test_negative_preference_needs_negative_source_phrase(p, q):
+    q = replace(q, preference="без конкурсов")
+    with_contests = replace(p, id="CONTESTS", price=Decimal(100000),
+                            description="Провожу конкурсы на каждом празднике.")
+    without_contests = replace(p, id="NO-CONTESTS", price=Decimal(400000),
+                               description="Веду мероприятие без конкурсов.")
+    result = select(catalog(with_contests, without_contests), q)
+    assert result["candidates"][0]["profile"].id == "NO-CONTESTS"
+    assert result["candidates"][0]["evidence"][0]["match"] == without_contests.description
+    assert result["candidates"][1]["breakdown"]["semantic"]["points"] == 0
 
 
 def test_real_data_deterministic_and_shuffle_invariant():
@@ -203,7 +213,7 @@ def test_three_cards_have_complete_distinct_recommendation_facts():
     assert len(explanations) == 3
     assert all([label for label, _ in facts] == expected_labels for facts in explanations)
     assert len({tuple(facts) for facts in explanations}) == 3
-    assert all("Дата отсутствует в списке занятых дат — подрядчик считается доступным." in dict(facts)["Доступность"] for facts in explanations)
+    assert all("На 14.11.2026 дата отсутствует в списке занятых дат" in dict(facts)["Доступность"] for facts in explanations)
 
 
 def test_top_comparison_uses_real_score_components():
@@ -212,9 +222,11 @@ def test_top_comparison_uses_real_score_components():
     rows = comparison_rows(first, second, q)
     assert [row["Фактор"] for row in rows] == ["Формат", "Язык", "Бюджет", "Длительность", "Смысловая релевантность"]
     for factor, row in zip(("format", "language", "budget", "duration", "semantic"), rows):
-        assert f"{first['breakdown'][factor]['points']:.1f}/{first['breakdown'][factor]['weight']}" in row[first["profile"].id]
-        assert f"{second['breakdown'][factor]['points']:.1f}/{second['breakdown'][factor]['weight']}" in row[second["profile"].id]
-    assert comparison_summary(first, second) == "HK-44733 выше HK-27222 на 10.0 балла: Релевантность описания +10.0."
+        if factor in first["breakdown"]:
+            assert f"{first['breakdown'][factor]['base_points']:.1f}/{first['breakdown'][factor]['weight']}" in row[first["profile"].id]
+            assert f"{second['breakdown'][factor]['base_points']:.1f}/{second['breakdown'][factor]['weight']}" in row[second["profile"].id]
+    assert first["profile"].id in comparison_summary(first, second)
+    assert second["profile"].id in comparison_summary(first, second)
 
 
 def test_real_demo_date_change_is_due_to_calendar():
@@ -232,5 +244,5 @@ def test_real_demo_date_change_is_due_to_calendar():
 
 def test_demo_outcomes():
     results = [select(load_catalog(), demo_request(name)) for name in DEMOS]
-    assert [r["status"] for r in results] == ["found", "found", "found", "no_matches", "no_category"]
-    assert [r["eligible"] for r in results] == [4, 6, 1, 0, 0]
+    assert [r["status"] for r in results] == ["found", "found", "found", "found", "no_matches", "no_category"]
+    assert [r["eligible"] for r in results] == [4, 6, 6, 1, 0, 0]

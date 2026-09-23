@@ -1,5 +1,6 @@
 """Template-only factual explanations; never influences eligibility or ranking."""
-import re
+
+from .text import best_evidence, sentences
 
 
 FACTOR_LABELS = {
@@ -24,22 +25,22 @@ def _score_suffix(candidate, factor):
     component = candidate["breakdown"].get(factor)
     if component is None:
         return "Фактор не влиял на итоговую оценку."
-    return f"Вклад в итоговую оценку: {component['points']:.1f} из {component['weight']} баллов."
+    return f"Базовый вклад: {component['base_points']:.1f} из {component['weight']} баллов."
 
 
 def availability_fact(profile, event_date):
     if not profile.busy_dates:
         return "В профиле нет данных о занятых датах — доступность требует подтверждения."
     if event_date not in profile.busy_dates:
-        return "Дата отсутствует в списке занятых дат — подрядчик считается доступным."
-    return "Дата присутствует в списке занятых дат — подрядчик недоступен."
+        return f"На {event_date:%d.%m.%Y} дата отсутствует в списке занятых дат — подрядчик считается доступным."
+    return f"На {event_date:%d.%m.%Y} дата присутствует в списке занятых дат — подрядчик недоступен."
 
 
 def recommendation_facts(candidate, q):
     """Facts displayed on a result card. They only use request/profile/score data."""
     p = candidate["profile"]
     supported_languages = {language.casefold() for language in p.languages}
-    matched = ", ".join(hit["match"] for hit in candidate["evidence"])
+    matched = candidate["evidence"][0]["match"] if candidate["evidence"] else ""
     facts = [
         ("Категория", f"«{q.category}» присутствует в категориях профиля: {', '.join(p.categories)}."),
         ("Город", f"Город профиля — {p.city}; он совпадает с городом запроса {q.city}."),
@@ -62,10 +63,12 @@ def recommendation_facts(candidate, q):
     else:
         duration = f"Запрошено {q.hours:g} ч при максимуме профиля {p.max_hours:g} ч. {_score_suffix(candidate, 'duration')}"
     facts.append(("Длительность", duration))
-    if matched:
-        relevance = f"В описании профиля найдены явные совпадения: {matched}. {_score_suffix(candidate, 'semantic')}"
+    if not q.preference:
+        relevance = "Пожелание в запросе не указано; описание не влияло на порядок."
+    elif matched:
+        relevance = f"Часть слов пожелания найдена в описании: «{matched}». {_score_suffix(candidate, 'semantic')}"
     elif p.description:
-        relevance = f"В описании профиля не найдены явные совпадения с форматом и выбранными языками. {_score_suffix(candidate, 'semantic')}"
+        relevance = f"В описании нет словесного подтверждения пожеланию «{q.preference}». {_score_suffix(candidate, 'semantic')}"
     else:
         relevance = f"Описание отсутствует; смысловая релевантность не подтверждена. {_score_suffix(candidate, 'semantic')}"
     facts.append(("Релевантность описания", relevance))
@@ -74,14 +77,29 @@ def recommendation_facts(candidate, q):
 
 def explain(candidate, q):
     p = candidate["profile"]
-    # Exact, attributed excerpt distinguishes descriptions without endorsing advertising claims.
-    first_sentence = re.split(r"(?<=[.!?])\s+", p.description, maxsplit=1)[0]
-    excerpt = first_sentence[:210]
-    if len(first_sentence) > 210:
-        excerpt = excerpt.rsplit(" ", 1)[0] + "…"
-    evidence = f'В описании {p.id} указано: «{excerpt}»' if excerpt else f"У {p.id} описание отсутствует; смысловая релевантность не подтверждена."
-    return (f"Цена от {money(p.price)} укладывается в бюджет {money(q.budget)}; формат «{q.event_format}» указан среди поддерживаемых. "
-            f"{evidence}")
+    hit = candidate["evidence"]
+    if hit:
+        excerpt = hit[0]["match"]
+    else:
+        _, format_hit = best_evidence(p.description, q.event_format)
+        passages = sentences(p.description)
+        informative = next((sentence for sentence in passages
+                            if len(sentence) >= 20 and not sentence.casefold().startswith(
+                                ("приветствую", "добрый день", "здравствуйте"))), "")
+        excerpt = format_hit[0]["match"] if format_hit else informative or (passages or [""])[0]
+    if len(excerpt) > 210:
+        matched_terms = hit[0]["terms"] if hit else []
+        positions = [excerpt.casefold().find(term) for term in matched_terms]
+        positions = [position for position in positions if position >= 0]
+        start = max(0, min(positions) - 60) if positions else 0
+        shortened = excerpt[start:start + 210].rsplit(" ", 1)[0]
+        excerpt = ("…" if start else "") + shortened + ("…" if start + 210 < len(excerpt) else "")
+    excerpt = excerpt.rstrip(" .!?")
+    reason = f"В описании {p.id}: «{excerpt}»" if excerpt else "Описание профиля отсутствует"
+    if q.preference and not hit:
+        reason += "; подтверждения пожеланию не найдено"
+    return (f"На {q.date:%d.%m.%Y} доступен по календарю; формат «{q.event_format}» подходит, цена от {money(p.price)} укладывается в бюджет. "
+            f"{reason}.")
 
 
 def comparison_rows(first, second, q):
@@ -92,7 +110,7 @@ def comparison_rows(first, second, q):
         value = candidate["breakdown"].get(factor)
         if value is None:
             return f"{detail}; не влиял на оценку"
-        return f"{detail}; {value['points']:.1f}/{value['weight']} баллов"
+        return f"{detail}; {value['base_points']:.1f}/{value['weight']} базовых баллов"
 
     requested_languages = ", ".join(q.languages) or "не заданы"
     if q.hours is None:
@@ -100,8 +118,8 @@ def comparison_rows(first, second, q):
     else:
         duration_a = f"{q.hours:g} ч ≤ {a.max_hours:g} ч" if a.max_hours is not None else f"{q.hours:g} ч; максимум часов не указан"
         duration_b = f"{q.hours:g} ч ≤ {b.max_hours:g} ч" if b.max_hours is not None else f"{q.hours:g} ч; максимум часов не указан"
-    evidence_a = ", ".join(hit["match"] for hit in first["evidence"]) or "совпадений нет"
-    evidence_b = ", ".join(hit["match"] for hit in second["evidence"]) or "совпадений нет"
+    evidence_a = first["evidence"][0]["match"] if first["evidence"] else "совпадений нет"
+    evidence_b = second["evidence"][0]["match"] if second["evidence"] else "совпадений нет"
     return [
         {"Фактор": "Формат", a.id: component(first, "format", f"«{q.event_format}» поддерживается"), b.id: component(second, "format", f"«{q.event_format}» поддерживается")},
         {"Фактор": "Язык", a.id: component(first, "language", f"{requested_languages}; профиль: {', '.join(a.languages)}"), b.id: component(second, "language", f"{requested_languages}; профиль: {', '.join(b.languages)}")},

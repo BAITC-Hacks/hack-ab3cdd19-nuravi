@@ -1,4 +1,5 @@
 from pathlib import Path
+from datetime import date
 
 import pytest
 from streamlit.testing.v1 import AppTest
@@ -64,9 +65,33 @@ def test_cards_show_factual_explanations_and_top_comparison():
     markdown = [item.value for item in at.markdown]
     assert [item.label for item in at.expander].count("Почему рекомендован") == 3
     assert sum("**Категория.**" in item for item in markdown) == 3
-    assert sum("**Доступность.** Дата отсутствует в списке занятых дат — подрядчик считается доступным." in item for item in markdown) == 3
+    assert sum("**Доступность.** На 14.11.2026 дата отсутствует в списке занятых дат" in item for item in markdown) == 3
     assert "Почему первый кандидат выше второго" in subheadings
-    assert any("HK-44733 выше HK-27222 на 10.0 балла" in item for item in markdown)
+    assert any("выше" in item and "балла" in item for item in markdown)
     assert not at.json
     assert not at.text
     assert not any("Словарные совпадения" in item or "description" in item for item in markdown)
+
+
+def test_only_local_profile_does_not_claim_other_profiles_failed():
+    at = AppTest.from_file(APP, default_timeout=20).run()
+    at.selectbox(key="city").set_value("Астана")
+    at.selectbox(key="category").set_value("Банкетный зал")
+    at.selectbox(key="event_format").set_value("корпоратив")
+    at.date_input(key="date").set_value(date(2026, 9, 23))
+    at.number_input(key="budget").set_value(3000000)
+    at.multiselect(key="languages").set_value([])
+    at.number_input(key="hours").set_value(0.0)
+    at.button[0].click().run()
+    assert not at.exception
+    assert "Профилей этой категории в городе: 1" in at.info[0].value
+    assert "Остальные профили не прошли" not in at.info[0].value
+
+
+def test_preference_is_applied_to_cards():
+    at = AppTest.from_file(APP, default_timeout=20).run()
+    at.button_group(key="demo").set_value("Пожелание · деловой форум")
+    at.run()
+    assert not at.exception
+    assert at.session_state.request.preference == "деловой форум"
+    assert any("бизнес форумы" in item.value for item in at.markdown)

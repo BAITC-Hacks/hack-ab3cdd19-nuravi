@@ -2,18 +2,15 @@ from collections import Counter
 from dataclasses import dataclass
 from datetime import date
 from decimal import Decimal
-import re
 
 from .data import START, END, DAYS, clean, key, number
+from .text import best_evidence, document_frequency
 
 REASONS = {"availability_unknown": "Нет данных о занятости", "busy": "Заняты на дату", "budget": "Выше бюджета", "format": "Не работают с форматом",
            "language": "Не подходят по языку", "duration": "Не подходят по длительности"}
+# Stable, human-readable base weights. Active weights are normalized only for
+# the final 0–100 score when a user leaves optional fields blank.
 WEIGHTS = {"format": 25, "language": 20, "budget": 20, "duration": 15, "semantic": 20}
-# Only literal word stems in the description count. No inferred quality or experience.
-TERMS = {"свадьба": ("свад", "бракосочет"), "той": ("той",),
-         "корпоратив": ("корпоратив",), "конференция": ("конференц", "форум"),
-         "юбилей": ("юбиле",), "день рождения": ("день рождения", "дня рождения", "дни рождения")}
-LANG_TERMS = {"русский": ("русск",), "казахский": ("казах",), "английский": ("англий",)}
 
 
 @dataclass(frozen=True)
@@ -25,6 +22,7 @@ class Request:
     budget: Decimal
     hours: object = None
     languages: tuple = ()
+    preference: str = ""
 
     def __post_init__(self):
         for f in ("city", "event_format", "category"):
@@ -38,6 +36,10 @@ class Request:
             object.__setattr__(self, "hours", number(self.hours, "Длительность"))
         langs = (self.languages,) if isinstance(self.languages, str) else self.languages
         object.__setattr__(self, "languages", tuple(sorted({key(x) for x in langs if clean(x)})))
+        preference = clean(self.preference)
+        if len(preference) > 240:
+            raise ValueError("Пожелание: не более 240 символов")
+        object.__setattr__(self, "preference", preference)
 
 
 def failures(p, q):
@@ -51,28 +53,19 @@ def failures(p, q):
     ) if fail)
 
 
-def semantic_evidence(p, q):
-    text = key(p.description)
-    groups = [("Формат в описании", TERMS.get(key(q.event_format), (key(q.event_format),)))]
-    groups += [(f"Язык в описании: {lang}", LANG_TERMS.get(lang, (lang,))) for lang in q.languages]
-    hits = []
-    for label, terms in groups:
-        for term in terms:
-            match = re.search(r"(?<!\w)" + re.escape(term) + r"\w*", text)
-            if match:
-                hits.append({"factor": label, "match": match.group(0), "field": "description"})
-                break
-    return Decimal(len(hits)) / Decimal(len(groups)), hits
+def semantic_evidence(p, q, frequency=None):
+    return best_evidence(p.description, q.preference, frequency)
 
 
-def score(p, q):
-    semantic, hits = semantic_evidence(p, q)
+def score(p, q, frequency=None):
+    semantic, hits = semantic_evidence(p, q, frequency)
     active = {k: v for k, v in WEIGHTS.items() if not (k == "language" and not q.languages)
-              and not (k == "duration" and q.hours is None)}
-    raw = {"format": Decimal(1), "language": Decimal(1), "budget": p.price / q.budget,
+              and not (k == "duration" and q.hours is None) and not (k == "semantic" and not q.preference)}
+    raw = {"format": Decimal(1), "language": Decimal(1), "budget": 1 - p.price / q.budget,
            "duration": Decimal(p.max_hours is not None), "semantic": semantic}
     denominator = Decimal(sum(active.values()))
-    breakdown = {k: {"weight": w, "value": float(raw[k]),
+    breakdown = {k: {"weight": w, "max_points": float(Decimal(w) * 100 / denominator),
+                     "base_points": float(raw[k] * w), "value": float(raw[k]),
                      "points": float(raw[k] * w * 100 / denominator)} for k, w in active.items()}
     exact = sum(raw[k] * w for k, w in active.items()) * 100 / denominator
     matches = 1 + len(q.languages) + int(q.hours is not None and p.max_hours is not None) + len(hits)
@@ -92,8 +85,10 @@ def select(catalog, q):
                        label.replace("Заняты на дату", "Доступны на дату") if reason == "busy" else
                        {"budget": "Прошли бюджет", "format": "Прошли формат", "language": "Прошли язык", "duration": "Прошли длительность"}[reason], len(remaining)))
     ranked = []
+    # Keep text weights stable when only the date, budget, or availability changes.
+    frequency = document_frequency(city) if q.preference else None
     for p in remaining:
-        total, breakdown, hits, matches = score(p, q)
+        total, breakdown, hits, matches = score(p, q, frequency)
         ranked.append({"profile": p, "score": float(total), "breakdown": breakdown, "evidence": hits,
                        "sort_key": (-total, -matches, p.price, Decimal(len(p.busy_dates)) / DAYS, p.id)})
     ranked.sort(key=lambda c: c["sort_key"])
